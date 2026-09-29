@@ -1,0 +1,7 @@
+{
+  "name": "pgvector-docs-chat",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter web dev"
+  }
+}
