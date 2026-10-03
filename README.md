@@ -1,14 +1,14 @@
 # pgvector-docs-chat
 
-PostgreSQL 공식 문서(pgvector 섹션)를 LangGraph + RAG 기반으로 검색하는 챗봇입니다.
+LangChain 공식 문서(JS/TS)를 LangGraph + RAG 기반으로 검색하는 챗봇입니다.
 
 ## Stack
 
 - **Frontend/Backend**: Next.js (App Router)
 - **AI Framework**: LangGraph + LangChain
-- **LLM**: Gemini 2.0 Flash (무료)
-- **Vector DB**: PostgreSQL + pgvector (Supabase)
-- **Embedding**: Gemini Embedding API
+- **LLM**: Gemini 3.8 Flash (로컬 개발 시 Ollama 전환 가능)
+- **Vector DB**: PostgreSQL + pgvector (Neon)
+- **Embedding**: Gemini Embedding API (`gemini-embedding-001`, 1536차원)
 - **Deploy**: Vercel
 
 ## Architecture
@@ -28,13 +28,15 @@ PostgreSQL 공식 문서(pgvector 섹션)를 LangGraph + RAG 기반으로 검색
 
 ```bash
 pnpm install
-cp .env.example .env.local
+cp apps/web/.env.example apps/web/.env.local
 pnpm dev
 ```
 
 ## Environment Variables
 
 ```env
+LLM_PROVIDER=          # gemini(기본) | ollama
 GEMINI_API_KEY=
-DATABASE_URL=
+EMBED_DATABASE_URL=    # 쓰기 계정 (scripts/)
+DATABASE_URL=          # 읽기 전용 계정 (Next.js)
 ```

@@ -1,0 +1,21 @@
+{
+  "name": "scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "crawl": "tsx crawl.ts",
+    "chunk": "tsx chunk.ts",
+    "embed": "tsx --no-warnings --env-file=../apps/web/.env.local embed.ts"
+  },
+  "dependencies": {
+    "@langchain/textsplitters": "^1.0.2",
+    "pg": "^8.23.1",
+    "pgvector": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

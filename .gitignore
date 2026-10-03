@@ -17,3 +17,6 @@ build/
 # misc
 .DS_Store
 *.log
+
+# crawled data (scripts/crawl.ts)
+data/
