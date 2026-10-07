@@ -2,26 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 색은 여기서만 정의하고 tailwind.config.ts에서 이름으로 연결한다 */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4f7f6;
+  --surface: #ffffff;
+  --foreground: #1b2b2e;
+  --muted: #5c6e71;
+  --line: #d3dddb;
+  --accent: #2d6e5d;
+  --accent-soft: #e1eeea;
+  --danger-bg: #fbecea;
+  --danger-line: #e9c0b9;
+  --danger-text: #8a2b1e;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #11191b;
+    --surface: #182225;
+    --foreground: #e1ebe9;
+    --muted: #8fa3a0;
+    --line: #28383b;
+    --accent: #6cc0a6;
+    --accent-soft: #1d3530;
+    --danger-bg: #2c1b19;
+    --danger-line: #5b302a;
+    --danger-text: #f5bcb1;
   }
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
 }

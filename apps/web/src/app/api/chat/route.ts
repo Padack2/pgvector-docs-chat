@@ -44,7 +44,14 @@ export async function POST(req: Request) {
         send({ type: "sources", sources: documents.map((doc) => ({ title: doc.title, url: doc.source_url })) });
       } catch (error) {
         console.error(error);
-        send({ type: "error", message: "답변 생성 중 오류가 발생했습니다." });
+        // Gemini 무료 티어 한도(분당·일일) 초과가 가장 흔한 실패라 따로 안내한다
+        const isQuota = /429|quota/i.test(String(error));
+        send({
+          type: "error",
+          message: isQuota
+            ? "Gemini API 사용 한도를 넘었습니다. 1분 뒤 다시 시도하고, 계속 실패하면 일일 한도가 풀리는 내일 오전에 시도하세요."
+            : "서버에서 답변을 만들지 못했습니다. 잠시 뒤 다시 시도하세요.",
+        });
       } finally {
         controller.close();
       }
