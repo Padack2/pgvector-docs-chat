@@ -13,6 +13,9 @@ importers:
       '@langchain/community':
         specifier: ^1.1.29
         version: 1.1.29(@browserbasehq/sdk@2.21.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.63.0)(deepmerge@4.3.1)(dotenv@16.6.1)(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(zod@4.6.5))(@ibm-cloud/watsonx-ai@1.7.16(supports-color@7.2.0))(@langchain/core@1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0))(ibm-cloud-sdk-core@5.6.3(supports-color@7.2.0))(ignore@7.0.10)(jsonwebtoken@9.0.3)(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(pg@8.23.1)(playwright@1.63.0)(ws@8.22.0)
+      '@langchain/core':
+        specifier: ^1.2.13
+        version: 1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0)
       '@langchain/google-genai':
         specifier: ^2.3.2
         version: 2.3.2(@langchain/core@1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0))
@@ -40,6 +43,9 @@ importers:
       react-dom:
         specifier: ^18
         version: 18.3.1(react@18.3.1)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: ^20
@@ -3278,7 +3284,7 @@ snapshots:
     dependencies:
       '@langchain/core': 1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0)
       '@langchain/openai': 1.6.0(@langchain/core@1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0))(ws@8.22.0)
-      '@langchain/textsplitters': 1.0.2(@langchain/core@1.2.13)
+      '@langchain/textsplitters': 1.0.2(@langchain/core@1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0))
       handlebars: 4.7.9
       js-yaml: 5.4.2
       jsonpointer: 5.0.1
@@ -3397,6 +3403,11 @@ snapshots:
 
   '@langchain/protocol@0.0.19': {}
 
+  '@langchain/textsplitters@1.0.2(@langchain/core@1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0))':
+    dependencies:
+      '@langchain/core': 1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0)
+      js-tiktoken: 1.0.21
+
   '@langchain/textsplitters@1.0.2(@langchain/core@1.2.13)':
     dependencies:
       '@langchain/core': 1.2.13(openai@7.23.0(ws@8.22.0)(zod@4.6.5))(ws@8.22.0)
@@ -3502,7 +3513,7 @@ snapshots:
 
   '@types/node-fetch@2.6.13':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 26.6.4
       form-data: 4.0.6
 
   '@types/node@18.19.130':
