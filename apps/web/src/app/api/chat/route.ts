@@ -1,3 +1,4 @@
+import { HumanMessage } from "@langchain/core/messages";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RetrievedChunk } from "@/lib/db/pgvector";
@@ -9,12 +10,13 @@ export const maxDuration = 60;
 // maxDuration보다 짧아야 제한에 걸렸을 때 에러 이벤트를 보낼 수 있다
 const GRAPH_TIMEOUT_MS = 50_000;
 
+// 대화 기록은 서버의 체크포인트에 있으므로 새 질문만 받는다
 const BodySchema = z.object({
-  messages: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) }))
-    .min(1)
-    // zod v4는 min(1)이 실패해도 refine을 실행하므로 빈 배열을 ?.로 방어
-    .refine((messages) => messages[messages.length - 1]?.role === "user", "마지막 메시지는 user여야 합니다"),
+  threadId: z.uuid(),
+  message: z.string().trim().min(1),
+  // 이어갈 체크포인트: 화면에 보이는 분기의 끝(이어서 질문) 또는 수정·재시도할 질문의 직전 상태(fork).
+  // 없으면 스레드의 최신 체크포인트에서 이어간다
+  checkpointId: z.string().min(1).optional(),
 });
 
 // 응답은 줄 단위 JSON(NDJSON) 이벤트 스트림:
@@ -37,10 +39,15 @@ export async function POST(req: Request) {
       const send = (event: object) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
       try {
         // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분
-        const events = await graph.stream(parsed.data, {
-          streamMode: ["messages", "updates"],
-          signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
-        });
+        const { threadId, message, checkpointId } = parsed.data;
+        const events = await graph.stream(
+          { messages: [new HumanMessage(message)] },
+          {
+            configurable: { thread_id: threadId, checkpoint_id: checkpointId },
+            streamMode: ["messages", "updates"],
+            signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+          },
+        );
         let documents: RetrievedChunk[] = [];
         for await (const [mode, chunk] of events) {
           if (mode === "messages") {

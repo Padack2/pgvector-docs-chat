@@ -65,3 +65,8 @@ REVOKE CREATE ON DATABASE neondb FROM checkpoint_user;
 ```
 
 패키지 업데이트로 마이그레이션이 추가되면 1의 GRANT → 2 → 3을 다시 실행한다.
+
+### 보관과 공개 범위
+
+- 체크포인트는 노드 실행마다 쌓인다 (질문 1개에 약 5~10개, 개당 수 KB). 30일 넘게 활동이 없는 대화는 `pnpm --filter scripts cleanup-threads -- --delete`로 지운다 (`--delete` 없이 실행하면 대상만 출력).
+- 대화 id(UUID)를 아는 사람은 누구나 그 대화를 읽고 이어서 질문할 수 있다. 로그인이 없는 데모라 별도 접근 제어는 두지 않았다.

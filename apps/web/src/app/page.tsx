@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
+import type { ThreadView } from "@/lib/threads";
 
 // 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고)
 type Step =
@@ -10,7 +11,20 @@ type Step =
   | { node: "grade"; isSufficient: boolean }
   | { node: "rewrite"; searchQuery: string };
 
-type Message = { role: "user" | "assistant"; content: string; steps?: Step[]; sources?: Source[]; error?: string };
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  steps?: Step[];
+  sources?: Source[];
+  error?: string;
+  // 질문(user)만: 수정·재시도 때 fork할 체크포인트와 같은 위치의 분기들 (lib/threads.ts)
+  forkFrom?: string;
+  branches?: string[];
+  branchIndex?: number;
+};
+
+// /api/chat 요청: 새 질문만 보내고, 대화 기록은 서버의 체크포인트(threadId)에 있다
+type ChatRequest = { threadId: string; message: string; checkpointId?: string };
 
 // /api/chat의 NDJSON 이벤트 (route.ts 주석 참고)
 type ChatEvent =
@@ -25,14 +39,11 @@ const EXAMPLES = [
   "Deep Agents는 일반 에이전트와 뭐가 달라?",
 ];
 
-async function streamChat(history: Message[], onEvent: (event: ChatEvent) => void) {
+async function streamChat(request: ChatRequest, onEvent: (event: ChatEvent) => void) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // 실패한 답변은 빈 문자열이거나 중간에 끊긴 내용이라 대화 기록에서 뺀다 (빈 content는 400)
-    body: JSON.stringify({
-      messages: history.filter((m) => !m.error).map(({ role, content }) => ({ role, content })),
-    }),
+    body: JSON.stringify(request),
   });
   if (!res.ok || !res.body) {
     const { error } = await res.json().catch(() => ({ error: `서버가 요청을 처리하지 못했습니다 (HTTP ${res.status}).` }));
@@ -51,6 +62,26 @@ async function streamChat(history: Message[], onEvent: (event: ChatEvent) => voi
     buffer = lines.pop()!;
     for (const line of lines) if (line) onEvent(JSON.parse(line));
   }
+}
+
+async function fetchThread(threadId: string, checkpointId?: string): Promise<ThreadView | null> {
+  const query = checkpointId ? `?checkpoint=${encodeURIComponent(checkpointId)}` : "";
+  const res = await fetch(`/api/threads/${threadId}${query}`);
+  return res.ok ? res.json() : null;
+}
+
+// 서버에 저장된 대화를 화면 메시지로. 마지막 질문에 답이 없으면 그 실행이 실패한 것이라 재시도할 수 있게 표시한다
+function toMessages(view: ThreadView, failedRun?: Pick<Message, "steps" | "error">): Message[] {
+  const messages: Message[] = view.messages.map((m) => ({ ...m }));
+  if (messages.at(-1)?.role === "user") {
+    messages.push({ role: "assistant", content: "", error: "답변을 받지 못한 질문입니다. 다시 시도하세요.", ...failedRun });
+  }
+  return messages;
+}
+
+function threadIdFromUrl() {
+  const id = new URLSearchParams(window.location.search).get("thread");
+  return id && /^[0-9a-f-]{36}$/i.test(id) ? id : null;
 }
 
 // 답변의 [n]은 sources[n-1]을 가리킨다. 같은 페이지의 청크가 여러 개면 번호를 모아 한 줄로 보여준다
@@ -161,13 +192,54 @@ function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => vo
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  // 화면에 보이는 분기의 마지막 체크포인트. 다음 질문은 여기서 이어간다
+  const [checkpointId, setCheckpointId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lastRequest = useRef<ChatRequest | null>(null);
+  // 분기를 바꿀 때는 방금 누른 전환 버튼이 화면에 남도록 맨 아래로 스크롤하지 않는다
+  const keepScroll = useRef(false);
 
   useEffect(() => {
+    if (keepScroll.current) {
+      keepScroll.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // URL의 ?thread=로 저장된 대화를 불러온다 (새로고침·링크 공유)
+  useEffect(() => {
+    const id = threadIdFromUrl();
+    if (!id) return;
+    setIsLoading(true);
+    fetchThread(id)
+      .then((view) => {
+        // 없는 대화면 새 대화로 시작
+        if (!view) return window.history.replaceState(null, "", window.location.pathname);
+        setThreadId(id);
+        setMessages(toMessages(view));
+        setCheckpointId(view.checkpointId);
+      })
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  function showView(view: ThreadView, failedRun?: Pick<Message, "steps" | "error">) {
+    setMessages(toMessages(view, failedRun));
+    setCheckpointId(view.checkpointId);
+  }
+
+  function startNewChat() {
+    window.history.replaceState(null, "", window.location.pathname);
+    setThreadId(null);
+    setCheckpointId(null);
+    setMessages([]);
+    setEditing(null);
+  }
 
   // 스트리밍 중인 마지막 assistant 메시지만 갱신
   const updateLast = (update: (message: Message) => Message) =>
@@ -176,30 +248,89 @@ export default function Home() {
   async function send(question: string) {
     if (!question || isLoading) return;
     setInput("");
-    await ask([...messages, { role: "user", content: question }]);
+    let id = threadId;
+    if (!id) {
+      id = crypto.randomUUID();
+      setThreadId(id);
+      window.history.replaceState(null, "", `?thread=${id}`);
+    }
+    // 마지막 질문이 실패한 채 새 질문을 보내면 실패한 질문을 대신하도록 그 직전에서 이어간다
+    const last = messages.at(-1);
+    const failedQuestion = last?.error ? messages.at(-2) : undefined;
+    const base = failedQuestion ? messages.slice(0, -2) : messages;
+    await ask(
+      { threadId: id, message: question, checkpointId: failedQuestion?.forkFrom ?? checkpointId ?? undefined },
+      [...base, { role: "user", content: question }],
+    );
   }
 
-  // 실패한 마지막 답변을 지우고 같은 질문으로 다시 요청
+  // 실패한 마지막 질문을 그 질문 직전 체크포인트에서 다시 실행 (실패한 실행은 분기 목록에서 숨겨진다)
   function retry() {
-    if (isLoading) return;
-    ask(messages.slice(0, -1));
+    const question = messages.at(-2);
+    if (isLoading || !threadId || !question) return;
+    // forkFrom이 없으면 서버가 질문을 저장하기 전에 실패한 것이라 같은 요청을 다시 보낸다
+    const checkpoint = question.forkFrom ?? lastRequest.current?.checkpointId;
+    ask({ threadId, message: question.content, checkpointId: checkpoint }, messages.slice(0, -1));
   }
 
-  // history는 user 메시지로 끝난다. 그 뒤에 빈 assistant 메시지를 붙여 스트리밍으로 채운다
-  async function ask(history: Message[]) {
-    setMessages([...history, { role: "assistant", content: "" }]);
+  // 질문을 고치면 그 질문 직전 체크포인트에서 새 분기로 실행한다
+  function submitEdit() {
+    if (!editing || !threadId) return;
+    const question = messages[editing.index];
+    const text = editing.text.trim();
+    setEditing(null);
+    if (!text || text === question.content || !question.forkFrom) return;
+    ask(
+      { threadId, message: text, checkpointId: question.forkFrom },
+      [...messages.slice(0, editing.index), { role: "user", content: text }],
+    );
+  }
+
+  async function switchBranch(question: Message, branchIndex: number) {
+    const target = question.branches?.[branchIndex];
+    if (isLoading || !threadId || !target) return;
     setIsLoading(true);
+    const view = await fetchThread(threadId, target).catch(() => null);
+    if (view) {
+      keepScroll.current = true;
+      showView(view);
+    }
+    setIsLoading(false);
+  }
+
+  // shown은 user 메시지로 끝난다. 그 뒤에 빈 assistant 메시지를 붙여 스트리밍으로 채우고,
+  // 끝나면 서버에 저장된 대화를 다시 불러와 분기 정보(forkFrom 등)를 받는다
+  async function ask(request: ChatRequest, shown: Message[]) {
+    lastRequest.current = request;
+    setMessages([...shown, { role: "assistant", content: "" }]);
+    setIsLoading(true);
+    // 다시 불러온 대화에는 처리 과정이 없으므로 이번 실행의 것을 옮겨 붙인다
+    const run: Pick<Message, "steps" | "error"> = { steps: [] };
     // 답변도 에러도 없이 스트림이 끝나면(서버 강제 종료 등) 실패로 표시해 재시도할 수 있게 한다
     let finished = false;
     try {
-      await streamChat(history, (event) => {
+      await streamChat(request, (event) => {
         if (event.type === "token" || event.type === "error") finished = true;
-        if (event.type === "step") updateLast((m) => ({ ...m, steps: [...(m.steps ?? []), event] }));
-        else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
+        if (event.type === "step") {
+          run.steps = [...run.steps!, event];
+          updateLast((m) => ({ ...m, steps: run.steps }));
+        } else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
         else if (event.type === "sources") updateLast((m) => ({ ...m, sources: event.sources }));
-        else updateLast((m) => ({ ...m, error: event.message }));
+        else {
+          run.error = event.message;
+          updateLast((m) => ({ ...m, error: event.message }));
+        }
       });
-      if (!finished) updateLast((m) => ({ ...m, error: "답변을 받기 전에 연결이 끊겼습니다. 다시 시도하세요." }));
+      if (!finished) {
+        run.error = "답변을 받기 전에 연결이 끊겼습니다. 다시 시도하세요.";
+        updateLast((m) => ({ ...m, error: run.error }));
+      }
+      // 서버가 질문을 저장하기 전에 실패했으면(요청 검증 실패 등) 다시 불러오면 질문이 사라지므로 화면 상태를 유지한다
+      const view = await fetchThread(request.threadId).catch(() => null);
+      if (view && view.messages.length >= shown.length) {
+        showView(view, run);
+        if (!run.error) setMessages((prev) => [...prev.slice(0, -1), { ...prev[prev.length - 1], steps: run.steps }]);
+      }
     } catch {
       updateLast((m) => ({ ...m, error: "서버에 연결하지 못했습니다. 네트워크 연결을 확인하고 다시 시도하세요." }));
     } finally {
@@ -216,11 +347,23 @@ export default function Home() {
     <main className="mx-auto flex h-dvh max-w-[44rem] flex-col px-4 sm:px-6">
       <header className="flex items-baseline justify-between gap-4 border-b border-line py-4">
         <h1 className="text-[17px] font-semibold tracking-tight">LangChain Docs Chat</h1>
-        <p className="text-sm text-muted">JS/TS 공식 문서 기준</p>
+        <div className="flex items-baseline gap-4">
+          <p className="hidden text-sm text-muted sm:block">JS/TS 공식 문서 기준</p>
+          {messages.length > 0 && (
+            <button
+              onClick={startNewChat}
+              disabled={isLoading}
+              className="text-sm font-semibold text-accent hover:underline disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              새 대화
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="flex-1 space-y-8 overflow-y-auto py-8">
-        {messages.length === 0 && (
+        {/* 저장된 대화를 불러오는 동안에는 첫 화면을 띄우지 않는다 */}
+        {messages.length === 0 && !isLoading && (
           <section className="pt-[12vh]">
             <h2 className="text-2xl font-semibold leading-snug tracking-tight sm:text-[28px]">
               LangChain을 쓰다 막힌 부분을 물어보세요.
@@ -244,10 +387,83 @@ export default function Home() {
 
         {messages.map((message, i) =>
           message.role === "user" ? (
-            <div key={i} className="flex justify-end">
-              <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-soft px-4 py-2.5 leading-relaxed">
-                {message.content}
-              </p>
+            <div key={i} className="flex flex-col items-end gap-1">
+              {editing?.index === i ? (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    submitEdit();
+                  }}
+                  className="w-full max-w-[85%] space-y-2"
+                >
+                  <label htmlFor={`edit-${i}`} className="sr-only">
+                    질문 수정
+                  </label>
+                  <textarea
+                    id={`edit-${i}`}
+                    value={editing.text}
+                    onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                    rows={3}
+                    autoFocus
+                    className="w-full resize-y rounded-xl border border-accent bg-surface px-4 py-2.5 leading-relaxed outline-none"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditing(null)}
+                      className="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!editing.text.trim()}
+                      className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    >
+                      다시 묻기
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-soft px-4 py-2.5 leading-relaxed">
+                  {message.content}
+                </p>
+              )}
+              {/* 서버에 저장된 질문만 수정·분기 전환 가능 (forkFrom은 대화를 다시 불러올 때 받는다) */}
+              {editing?.index !== i && message.forkFrom && (
+                <div className="flex items-center gap-0.5 text-sm text-muted">
+                  {message.branches && message.branches.length > 1 && (
+                    <>
+                      <button
+                        onClick={() => switchBranch(message, message.branchIndex! - 1)}
+                        disabled={isLoading || message.branchIndex === 0}
+                        aria-label="이전 분기"
+                        className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        ‹
+                      </button>
+                      <span className="tabular-nums">
+                        {message.branchIndex! + 1}/{message.branches.length}
+                      </span>
+                      <button
+                        onClick={() => switchBranch(message, message.branchIndex! + 1)}
+                        disabled={isLoading || message.branchIndex === message.branches.length - 1}
+                        aria-label="다음 분기"
+                        className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        ›
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => setEditing({ index: i, text: message.content })}
+                    disabled={isLoading}
+                    className="ml-1 rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    수정
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <article key={i} className="space-y-4">

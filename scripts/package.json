@@ -7,7 +7,8 @@
     "chunk": "tsx chunk.ts",
     "embed": "tsx --no-warnings --env-file=../apps/web/.env.local embed.ts",
     "eval": "tsx --no-warnings --env-file=../apps/web/.env.local eval.ts",
-    "setup-checkpointer": "tsx --no-warnings --env-file=../apps/web/.env.local setup-checkpointer.ts"
+    "setup-checkpointer": "tsx --no-warnings --env-file=../apps/web/.env.local setup-checkpointer.ts",
+    "cleanup-threads": "tsx --no-warnings --env-file=../apps/web/.env.local cleanup-threads.ts"
   },
   "dependencies": {
     "@langchain/textsplitters": "^1.0.2",

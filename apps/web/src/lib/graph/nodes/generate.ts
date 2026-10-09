@@ -1,4 +1,4 @@
-import { SystemMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage } from "@langchain/core/messages";
 import { invokeChat } from "../../llm";
 import type { GraphStateType, GraphStateUpdate } from "../state";
 import { formatDocuments } from "./retrieve";
@@ -17,5 +17,7 @@ ${formatDocuments(state.documents)}`
 이번 메시지는 문서 검색이 필요 없는 대화입니다. 짧게 응대하고, 필요하면 LangChain 관련 질문을 하도록 안내하세요.`;
 
   const answer = await invokeChat([new SystemMessage(prompt), ...state.messages]);
-  return { messages: [answer] };
+  // 대화를 다시 불러올 때 출처도 보여주도록 답변 메시지에 함께 저장한다 (체크포인트에 남음)
+  const sources = state.needsSearch ? state.documents.map((doc) => ({ title: doc.title, url: doc.source_url })) : [];
+  return { messages: [new AIMessage({ id: answer.id, content: answer.content, additional_kwargs: { sources } })] };
 }

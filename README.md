@@ -11,6 +11,7 @@ LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangG
 - **근거 기반 답변**: 검색한 문서 안에서만 답하고, 근거로 쓴 문서를 `[n]`으로 인용합니다. 문서에 없으면 찾지 못했다고 답합니다.
 - **자기 교정 검색 (Self-RAG)**: 검색 결과가 답하기에 부족하면 검색어를 문서 용어로 다시 써서 최대 3번까지 재검색합니다.
 - **후속 질문 이해**: "그거 예시는?" 같은 질문을 대화 맥락을 반영한 독립 질문으로 바꿔 검색합니다.
+- **대화 저장과 분기**: 대화가 서버에 저장돼 새로고침하거나 링크(`?thread=`)를 공유해도 이어집니다. 이전 질문을 고치면 그 시점부터 대화가 갈라지고, `‹ 1/2 ›`로 분기를 오갈 수 있습니다.
 - **처리 과정 표시**: 그래프의 각 단계(검색어, 찾은 청크 수, 평가 결과)를 실시간으로 보여주고, 답변이 시작되면 접어 둡니다.
 - **장애 대응**: 모델 실패 시 다른 모델로 자동 전환하고, 응답이 없으면 시간 제한 후 재시도 버튼을 보여줍니다.
 
@@ -46,6 +47,13 @@ flowchart TD
 - `POST /api/chat`은 NDJSON 이벤트 스트림으로 응답합니다: 단계 진행(`step`), 답변 토큰(`token`), 출처(`sources`), 실패(`error`).
 - LLM 호출 횟수를 줄이려고 분류와 검색어 작성을 한 번에 처리하고, 검색 결과는 청크별이 아니라 묶어서 한 번에 평가합니다.
 
+### 대화 저장과 분기 (`PostgresSaver`, time travel)
+
+- 그래프를 `PostgresSaver` checkpointer로 컴파일해, 대화 상태가 노드 실행마다 Neon의 `langgraph` 스키마에 `thread_id`별로 저장됩니다. 클라이언트는 대화 기록 대신 `threadId`와 새 질문만 보냅니다.
+- 질문 수정·재시도는 그 질문이 들어가기 직전 체크포인트에서 다시 실행(fork)해 형제 분기를 만듭니다. `GET /api/threads/[id]`가 `getStateHistory`로 체크포인트 트리를 읽어 지금 보이는 분기의 대화와 질문별 분기 목록을 돌려줍니다 ([`threads.ts`](apps/web/src/lib/threads.ts)).
+- 답변 없이 실패한 실행은 재시도로 대체된 것이므로 분기 목록에서 숨깁니다.
+- 체크포인트 전용 DB 계정은 자기 스키마만 쓸 수 있고 문서 테이블에는 접근할 수 없습니다 ([schema.md](docs/schema.md#대화-체크포인트-langgraph-스키마)).
+
 ## 검색 품질 평가
 
 검색이 실제로 잘 되는지 확인하려고 평가셋을 만들어 측정했습니다 (`pnpm --filter scripts eval`).
@@ -80,6 +88,7 @@ flowchart TD
 | 임베딩 일일 한도(약 1,000건)로 3천 청크를 하루에 못 넣음 | 바뀐 페이지만 임베딩하는 증분 동기화로 4일에 나눠 적재 ([ADR-002](docs/adr/ADR-002-incremental-sync.md)) |
 | `gemini-3.8-flash` 무료 티어가 하루 20요청이라 질문 몇 개면 429 | `gemini-3.5-flash` → `gemini-3.1-flash-lite` 순으로 자동 전환 ([`llm.ts`](apps/web/src/lib/llm.ts)) |
 | 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 50초 제한 |
+| 질문을 수정해 분기하면 새 분기가 다른 분기의 메시지를 읽음 | JS `PostgresSaver`가 채널 버전을 정수로 1씩 올려 두 분기의 버전이 겹치고, `checkpoint_blobs`의 `ON CONFLICT DO NOTHING`으로 새 값이 버려지는 문제를 체크포인트 덤프로 확인. Python 구현처럼 버전에 난수 접미사를 붙이도록 `getNextVersion`을 재정의 ([`checkpointer.ts`](apps/web/src/lib/db/checkpointer.ts)) |
 | 스트리밍 도중 실패하면 HTTP 상태 코드로 알릴 수 없음 | `error` 이벤트로 원인별 안내(한도 초과 / 시간 초과 / 기타), 마지막 답변에 재시도 버튼 |
 
 ## 기술 스택
@@ -95,17 +104,21 @@ flowchart TD
 ```
 apps/web/src/
 ├── app/
-│   ├── page.tsx              # 채팅 UI (스트림 파싱, 처리 과정, 재시도)
-│   └── api/chat/route.ts     # 그래프 실행 → NDJSON 이벤트 스트림
+│   ├── page.tsx              # 채팅 UI (스트림 파싱, 처리 과정, 재시도, 질문 수정·분기 전환)
+│   ├── api/chat/route.ts     # 그래프 실행 → NDJSON 이벤트 스트림
+│   └── api/threads/[id]/route.ts  # 저장된 대화 불러오기
 ├── components/AnswerMarkdown.tsx  # 마크다운 + [n] 인용 배지
 └── lib/
     ├── graph/                # LangGraph 상태·노드·그래프 정의
     ├── db/pgvector.ts        # 유사도 검색 (읽기 전용 계정)
+    ├── db/checkpointer.ts    # 대화 체크포인트 저장 (PostgresSaver)
+    ├── threads.ts            # 체크포인트 트리 → 화면용 대화·분기 목록
     ├── embedding.ts          # Gemini 임베딩 (저장·검색 공용)
     └── llm.ts                # LLM 호출, 모델 자동 전환
 scripts/
 ├── crawl.ts / chunk.ts / embed.ts  # 데이터 파이프라인
-└── eval.ts, eval/questions.json    # 검색 품질 평가
+├── eval.ts, eval/questions.json    # 검색 품질 평가
+└── setup-checkpointer.ts / cleanup-threads.ts  # 체크포인트 테이블 생성, 오래된 대화 정리
 docs/
 ├── schema.md                 # DB 스키마
 └── adr/                      # 설계 결정 기록
@@ -120,7 +133,7 @@ pnpm install
 cp apps/web/.env.example apps/web/.env.local   # 값 채우기
 ```
 
-DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 임베딩 저장용(쓰기) 계정과 챗봇용(읽기 전용) 계정을 준비합니다.
+DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 계정 3개(임베딩 저장용, 챗봇 검색용 읽기 전용, 대화 체크포인트용)를 준비합니다. 체크포인트 테이블은 schema.md의 절차대로 `pnpm --filter scripts setup-checkpointer`로 만듭니다.
 
 ```bash
 # 데이터 적재 (data/ 아래에 중간 결과 저장)
@@ -131,11 +144,14 @@ pnpm --filter scripts embed    # 무료 한도에 걸리면 멈춤. 다음 날 �
 # 검색 품질 평가
 pnpm --filter scripts eval
 
+# 30일 넘게 활동이 없는 대화 정리 (기본은 대상만 출력)
+pnpm --filter scripts cleanup-threads -- --delete
+
 # 챗봇 실행 (http://localhost:3000)
 pnpm dev
 ```
 
-> `node_modules`의 네이티브 바이너리(esbuild, Next SWC)는 설치한 OS용으로만 받아집니다. Windows와 WSL을 오가며 쓴다면 실행할 환경에서 `pnpm install`을 하세요.
+> Windows와 WSL을 오가며 쓴다면 `pnpm install`은 Windows에서 하세요. 두 OS의 네이티브 바이너리를 함께 받도록 설정돼 있지만(`pnpm-workspace.yaml`), WSL이 만든 심볼릭 링크는 Windows에서 읽지 못합니다. WSL의 개발 서버는 `/mnt/` 아래 파일 변경을 감지하지 못하므로 코드를 고친 뒤 다시 시작해야 합니다.
 
 ### 환경 변수 (`apps/web/.env.local`)
 
@@ -147,6 +163,7 @@ pnpm dev
 | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | `LLM_PROVIDER=ollama`일 때만 사용 |
 | `EMBED_DATABASE_URL` | 쓰기 계정. `scripts/embed.ts`에서만 사용 |
 | `DATABASE_URL` | 읽기 전용 계정. 챗봇 검색과 평가에서 사용 |
+| `CHECKPOINT_DATABASE_URL` | 대화 체크포인트 계정. `langgraph` 스키마만 쓰기 가능 |
 
 ## 문서
 

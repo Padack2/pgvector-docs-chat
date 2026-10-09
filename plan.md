@@ -60,15 +60,15 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 - 서버리스라 `PostgresSaver.setup()`(테이블 생성)은 요청마다 하지 않고 스크립트로 한 번 실행
 
 작업
-- [x] `@langchain/langgraph-checkpoint-postgres` 설치, langgraph 1.4.x와 버전 호환 확인
+- [x] `@langchain/langgraph-checkpoint-postgres` 설치, langgraph 1.4.x와 버전 호환 확인 — 1.0.6은 채널 버전을 정수로 매겨 분기 간 blob이 충돌하므로 `getNextVersion` 재정의 (`checkpointer.ts`)
 - [x] Neon에 checkpoint 전용 스키마·계정 생성, `CHECKPOINT_DATABASE_URL` 추가 (.env.example, Vercel) → 확인: 이 계정으로 `doc_chunks` 쓰기가 거부되는지
 - [x] `scripts/setup-checkpointer.ts`로 테이블 생성
-- [ ] `graph.compile({ checkpointer })`, route 요청 형식을 `{ threadId, message }`로 변경 → 확인: 같은 threadId로 두 번 질문하면 두 번째 답이 첫 대화를 이어받는지 (후속 질문 "그거 예시는?")
-- [ ] `GET /api/threads/[id]`: 저장된 대화 불러오기, 클라이언트는 URL(`?thread=`)에 threadId 유지 → 확인: 새로고침·링크 공유 후 대화가 그대로 보이는지
-- [ ] 재시도를 체크포인트 기준으로 변경 (실패한 실행 직전 체크포인트에서 다시 실행) → 확인: 실패 후 재시도해도 대화 기록에 실패한 턴이 남지 않는지
-- [ ] 메시지 수정 → fork, 같은 위치의 분기를 `< 1/2 >`로 전환하는 UI → 확인: 분기를 오가도 각 분기의 이후 대화가 유지되는지
-- [ ] 오래된 스레드 정리 방침 (체크포인트는 매 단계 쌓여 무한히 커짐): 보관 기간을 정하고 정리 스크립트 작성
-- [ ] README·schema.md 갱신, threadId(UUID)를 아는 사람은 대화를 볼 수 있다는 점 명시
+- [x] `graph.compile({ checkpointer })`, route 요청 형식을 `{ threadId, message }`로 변경 → 확인: 같은 threadId로 두 번 질문하면 두 번째 답이 첫 대화를 이어받는지 (후속 질문 "그거 예시는?")
+- [x] `GET /api/threads/[id]`: 저장된 대화 불러오기, 클라이언트는 URL(`?thread=`)에 threadId 유지 → 확인: 새로고침·링크 공유 후 대화가 그대로 보이는지
+- [x] 재시도를 체크포인트 기준으로 변경 (실패한 실행 직전 체크포인트에서 다시 실행) → 확인: 실패 후 재시도해도 대화 기록에 실패한 턴이 남지 않는지
+- [x] 메시지 수정 → fork, 같은 위치의 분기를 `< 1/2 >`로 전환하는 UI → 확인: 분기를 오가도 각 분기의 이후 대화가 유지되는지
+- [x] 오래된 스레드 정리 방침 (체크포인트는 매 단계 쌓여 무한히 커짐): 보관 기간을 정하고 정리 스크립트 작성: 30일, `scripts/cleanup-threads.ts`
+- [x] README·schema.md 갱신, threadId(UUID)를 아는 사람은 대화를 볼 수 있다는 점 명시
 
 ## Phase 6 — 애매한 질문 되묻기 (interrupt)
 목표: 질문이 LangChain / LangGraph / Deep Agents 중 어느 것에 대한 것인지 애매하면 그래프를 멈추고 선택지를 보여준 뒤, 고른 값으로 이어서 실행한다.
