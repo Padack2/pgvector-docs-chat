@@ -48,7 +48,62 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 - [x] 평가 스크립트 (`pnpm --filter scripts eval`): Hit@k·MRR, 질문 임베딩 캐시로 재실행 시 API 호출 없음
 - [x] 베이스라인 (벡터 검색, 2026-10-09): Hit@1 78% / Hit@5 98% / MRR 0.858 — 상위 5개 밖은 희귀 식별자 에러 질문 1건(`ContextOverflowError`)
 - [ ] 실사용 질문 추가 (현재 질문·정답을 모두 Claude가 작성해 편향 가능)
-- [ ] 평가 결과를 보고 다음 개선 방향 결정
+- [x] 평가 결과를 보고 다음 개선 방향 결정: 검색은 충분(Hit@5 98%) → 하이브리드 검색 보류, LangGraph 기능 확장(Phase 5~7)으로 방향 결정
+
+## Phase 5 — 대화 저장과 분기 (checkpointer, time travel)
+목표: 대화를 서버에 스레드로 저장하고, 이전 질문을 수정하면 그 시점부터 대화가 갈라지게 한다. Phase 6(interrupt)의 전제 조건.
+
+설계
+- 지금은 클라이언트가 매 요청에 대화 전체를 보낸다 → `threadId` + 새 메시지만 보내고, 기록은 checkpointer가 가진다
+- `@langchain/langgraph-checkpoint-postgres`의 `PostgresSaver`를 Neon에 연결. 챗봇 계정(`DATABASE_URL`)은 읽기 전용이므로 checkpoint 테이블에만 쓸 수 있는 계정을 따로 둔다 (문서 테이블 쓰기 권한은 주지 않음)
+- 분기는 `getStateHistory`로 수정할 질문 직전 체크포인트를 찾고 `checkpoint_id`를 지정해 다시 실행(fork). 공식 프론트엔드 SDK(`useStream`)는 Agent Server 전제라 쓰지 않고 route에서 직접 구현
+- 서버리스라 `PostgresSaver.setup()`(테이블 생성)은 요청마다 하지 않고 스크립트로 한 번 실행
+
+작업
+- [x] `@langchain/langgraph-checkpoint-postgres` 설치, langgraph 1.4.x와 버전 호환 확인
+- [x] Neon에 checkpoint 전용 스키마·계정 생성, `CHECKPOINT_DATABASE_URL` 추가 (.env.example, Vercel) → 확인: 이 계정으로 `doc_chunks` 쓰기가 거부되는지
+- [x] `scripts/setup-checkpointer.ts`로 테이블 생성
+- [ ] `graph.compile({ checkpointer })`, route 요청 형식을 `{ threadId, message }`로 변경 → 확인: 같은 threadId로 두 번 질문하면 두 번째 답이 첫 대화를 이어받는지 (후속 질문 "그거 예시는?")
+- [ ] `GET /api/threads/[id]`: 저장된 대화 불러오기, 클라이언트는 URL(`?thread=`)에 threadId 유지 → 확인: 새로고침·링크 공유 후 대화가 그대로 보이는지
+- [ ] 재시도를 체크포인트 기준으로 변경 (실패한 실행 직전 체크포인트에서 다시 실행) → 확인: 실패 후 재시도해도 대화 기록에 실패한 턴이 남지 않는지
+- [ ] 메시지 수정 → fork, 같은 위치의 분기를 `< 1/2 >`로 전환하는 UI → 확인: 분기를 오가도 각 분기의 이후 대화가 유지되는지
+- [ ] 오래된 스레드 정리 방침 (체크포인트는 매 단계 쌓여 무한히 커짐): 보관 기간을 정하고 정리 스크립트 작성
+- [ ] README·schema.md 갱신, threadId(UUID)를 아는 사람은 대화를 볼 수 있다는 점 명시
+
+## Phase 6 — 애매한 질문 되묻기 (interrupt)
+목표: 질문이 LangChain / LangGraph / Deep Agents 중 어느 것에 대한 것인지 애매하면 그래프를 멈추고 선택지를 보여준 뒤, 고른 값으로 이어서 실행한다.
+
+설계
+- 같은 주제가 세 프레임워크 문서에 겹쳐 있다 (streaming, memory, human-in-the-loop, subagents 등 — 평가셋에서도 정답 페이지가 여러 곳)
+- classify 출력에 "대상 프레임워크"(하나로 특정 / 애매)를 추가하고, 애매하면 별도 `clarify` 노드에서 `interrupt({ question, options })`. 재개 시 노드가 처음부터 다시 실행되므로 interrupt 앞에 부수 효과를 두지 않는다
+- 고른 프레임워크로 검색 범위를 제한 (`source_url` 경로로 pgvector 쿼리에 메타데이터 필터) → 검색어만 바꾸는 것보다 확실하게 좁힘
+- route: updates 스트림의 `__interrupt__`를 `{"type":"interrupt", question, options}` 이벤트로 전달, 재개 요청은 `new Command({ resume })`로 같은 스레드에서 실행
+- LLM 호출 수는 그대로 (분류 출력 필드만 추가)
+
+작업
+- [ ] classify 스키마에 대상 프레임워크 필드 추가, 프롬프트에 "명확하면 묻지 않는다" 기준 명시
+- [ ] `clarify` 노드 + 그래프 분기 (classify → clarify → retrieve)
+- [ ] `searchChunks`에 프레임워크 필터 추가 (`source_url LIKE` 경로 조건) → 확인: 필터 적용 시 다른 프레임워크 청크가 나오지 않는지
+- [ ] route에 interrupt 이벤트·resume 요청 처리
+- [ ] UI: 선택지 버튼 + 직접 입력, 처리 과정에 "되물음 · LangGraph 선택" 단계 표시 → 확인: 새로고침 후에도 멈춘 질문이 다시 보이고 이어서 답할 수 있는지 (Phase 5 체크포인트)
+- [ ] 되묻기 판단 평가: 애매한 질문·명확한 질문 각 10개로 "물어야 할 때 묻고, 안 물어야 할 때 안 묻는지" 측정 (LLM 호출이 필요하므로 Ollama 또는 한도 안에서 실행)
+
+## Phase 7 — 복합 질문 분해와 병렬 검색 (Send, 서브그래프)
+목표: "checkpointer와 store는 뭐가 다르고 각각 언제 써?"처럼 여러 주제를 묻는 질문을 하위 질문으로 나눠 동시에 검색하고, 합쳐서 답한다.
+
+설계
+- 지금의 retrieve → grade → rewrite 반복을 하위 질문 하나를 조사하는 서브그래프로 분리하고, 단일 질문도 같은 서브그래프를 1번 실행 (코드 경로 하나)
+- classify(또는 별도 plan 노드)가 하위 질문 1~3개를 만들고, `Send`로 서브그래프를 하위 질문 수만큼 병렬 실행
+- 각 분기 결과는 reducer로 합치고 중복 청크를 제거, 답변 컨텍스트는 상한(예: 8청크)을 둠. 인용 번호는 합친 순서 기준
+- 처리 과정 UI는 `subgraphs: true` 스트림의 namespace로 분기별 단계를 구분해 표시
+- 하위 질문마다 grade 호출이 생겨 LLM 호출이 가장 많이 늘어남 → 하위 질문 최대 3개, 분당 한도는 모델 자동 전환(Phase 4 이후 llm.ts)에 의존
+
+작업
+- [ ] 평가셋에 비교·복합 질문 10개 추가 (하위 주제별 정답 섹션), 지표: 모든 하위 주제의 정답 섹션이 답변 컨텍스트에 들어간 비율 → 분해 전 베이스라인 먼저 측정
+- [ ] 검색 반복 구간을 서브그래프로 분리 → 확인: 기존 평가 결과(Hit@5 98%)와 단일 질문 동작이 그대로인지
+- [ ] 질문 분해 출력 + `Send` 병렬 실행 + 결과 병합 reducer
+- [ ] 처리 과정 UI에 분기별 단계 표시
+- [ ] 분해 전후 비교 평가, README에 결과 추가 → 확인: 복합 질문 지표가 오르고 단일 질문 지표는 떨어지지 않는지
 
 ## DB 스키마
 ```sql
