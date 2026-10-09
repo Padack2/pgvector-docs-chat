@@ -27,21 +27,28 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 - [x] Neon 프로젝트 생성 및 pgvector 확장 활성화
 - [x] 문서 크롤링 스크립트 작성
 - [x] 청킹 전략 결정: MDX 정리 → 헤딩 단위 섹션 → 1500자/150 overlap 분할, 청크 앞에 `제목 > 섹션` 경로 부착 (`scripts/chunk.ts`)
-- [ ] Gemini Embedding API로 임베딩 생성
-- [ ] pgvector 테이블에 저장 (바뀐 페이지만 재임베딩, [ADR-002](docs/adr/ADR-002-incremental-sync.md))
+- [x] Gemini Embedding API로 임베딩 생성
+- [x] pgvector 테이블에 저장 (바뀐 페이지만 재임베딩, [ADR-002](docs/adr/ADR-002-incremental-sync.md))
 
 ## Phase 2 — LangGraph 워크플로우
-- [ ] LangGraph 노드 설계 및 구현
-- [ ] 의도 분류 로직
-- [ ] RAG 검색 노드
-- [ ] 재검색 루프 (Self-RAG 패턴)
-- [ ] 답변 생성 노드
+- [x] LangGraph 노드 설계 및 구현
+- [x] 의도 분류 로직
+- [x] RAG 검색 노드
+- [x] 재검색 루프 (Self-RAG 패턴)
+- [x] 답변 생성 노드
 
 ## Phase 3 — Next.js 챗봇 UI
-- [ ] 채팅 UI 구현
-- [ ] 스트리밍 응답 처리
-- [ ] 참조 문서 출처 표시
-- [ ] Vercel 배포
+- [x] 채팅 UI 구현
+- [x] 스트리밍 응답 처리
+- [x] 참조 문서 출처 표시
+- [x] Vercel 배포
+
+## Phase 4 — 검색 품질 평가
+- [x] 평가셋 50문항 (`scripts/eval/questions.json`): 섹션 단위 정답, 한/영, 상황 설명·API 이름·에러 메시지 유형
+- [x] 평가 스크립트 (`pnpm --filter scripts eval`): Hit@k·MRR, 질문 임베딩 캐시로 재실행 시 API 호출 없음
+- [x] 베이스라인 (벡터 검색, 2026-10-09): Hit@1 78% / Hit@5 98% / MRR 0.858 — 상위 5개 밖은 희귀 식별자 에러 질문 1건(`ContextOverflowError`)
+- [ ] 실사용 질문 추가 (현재 질문·정답을 모두 Claude가 작성해 편향 가능)
+- [ ] 평가 결과를 보고 다음 개선 방향 결정
 
 ## DB 스키마
 ```sql
