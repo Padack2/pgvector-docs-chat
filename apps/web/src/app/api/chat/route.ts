@@ -3,6 +3,12 @@ import { z } from "zod";
 import type { RetrievedChunk } from "@/lib/db/pgvector";
 import { graph } from "@/lib/graph";
 
+// Vercel 함수 최대 실행 시간(초). 이걸 넘기면 함수가 강제 종료돼 클라이언트는 에러 이벤트도 받지 못한다
+export const maxDuration = 60;
+// 모델이 응답 없이 멈추는 경우가 있어(2026-10-09 gemini-3.8-flash) 그래프 전체에 시간 제한을 둔다.
+// maxDuration보다 짧아야 제한에 걸렸을 때 에러 이벤트를 보낼 수 있다
+const GRAPH_TIMEOUT_MS = 50_000;
+
 const BodySchema = z.object({
   messages: z
     .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) }))
@@ -12,6 +18,10 @@ const BodySchema = z.object({
 });
 
 // 응답은 줄 단위 JSON(NDJSON) 이벤트 스트림:
+//   {"type":"step","node":"classify","needsSearch":true,"searchQuery":"..."}  노드가 끝날 때마다 (generate 제외)
+//   {"type":"step","node":"retrieve","count":5}
+//   {"type":"step","node":"grade","isSufficient":false}
+//   {"type":"step","node":"rewrite","searchQuery":"..."}
 //   {"type":"token","text":"..."}                      답변 토큰 (generate 노드 것만)
 //   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 순서가 답변의 [1], [2] 번호와 같다
 //   {"type":"error","message":"..."}                   스트리밍 도중 실패 (이미 200을 보낸 뒤라 상태 코드로 알릴 수 없음)
@@ -27,7 +37,10 @@ export async function POST(req: Request) {
       const send = (event: object) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
       try {
         // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분
-        const events = await graph.stream(parsed.data, { streamMode: ["messages", "updates"] });
+        const events = await graph.stream(parsed.data, {
+          streamMode: ["messages", "updates"],
+          signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+        });
         let documents: RetrievedChunk[] = [];
         for await (const [mode, chunk] of events) {
           if (mode === "messages") {
@@ -35,9 +48,19 @@ export async function POST(req: Request) {
             // classify·grade·rewrite의 LLM 출력도 흘러오므로 답변 노드 것만 보낸다
             if (metadata.langgraph_node === "generate" && message.text) send({ type: "token", text: message.text });
           } else {
-            // 재검색하면 documents가 교체되므로 마지막 값이 답변 근거
-            for (const update of Object.values(chunk)) {
-              if (update?.documents) documents = update.documents;
+            for (const [node, update] of Object.entries(chunk)) {
+              if (!update) continue;
+              if (node === "classify") {
+                send({ type: "step", node, needsSearch: update.needsSearch, searchQuery: update.searchQuery });
+              } else if (node === "retrieve") {
+                // 재검색하면 documents가 교체되므로 마지막 값이 답변 근거
+                documents = update.documents ?? [];
+                send({ type: "step", node, count: documents.length });
+              } else if (node === "grade") {
+                send({ type: "step", node, isSufficient: update.isSufficient });
+              } else if (node === "rewrite") {
+                send({ type: "step", node, searchQuery: update.searchQuery });
+              }
             }
           }
         }
@@ -46,11 +69,14 @@ export async function POST(req: Request) {
         console.error(error);
         // Gemini 무료 티어 한도(분당·일일) 초과가 가장 흔한 실패라 따로 안내한다
         const isQuota = /429|quota/i.test(String(error));
+        const isTimeout = /abort|timeout/i.test(String(error));
         send({
           type: "error",
           message: isQuota
             ? "Gemini API 사용 한도를 넘었습니다. 1분 뒤 다시 시도하고, 계속 실패하면 일일 한도가 풀리는 내일 오전에 시도하세요."
-            : "서버에서 답변을 만들지 못했습니다. 잠시 뒤 다시 시도하세요.",
+            : isTimeout
+              ? "모델 응답이 너무 오래 걸려 중단했습니다. 잠시 뒤 다시 시도하세요."
+              : "서버에서 답변을 만들지 못했습니다. 잠시 뒤 다시 시도하세요.",
         });
       } finally {
         controller.close();
