@@ -1,6 +1,6 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
-import { getChatModel } from "../../llm";
+import { invokeStructured } from "../../llm";
 import type { GraphStateType, GraphStateUpdate } from "../state";
 
 const RewriteSchema = z.object({
@@ -17,7 +17,6 @@ export async function rewrite(state: GraphStateType): Promise<GraphStateUpdate> 
 이전 쿼리: ${state.searchQuery}
 이전 검색 결과 제목: ${titles}`;
 
-  const model = getChatModel().withStructuredOutput(RewriteSchema);
-  const { searchQuery } = await model.invoke([new SystemMessage(prompt), ...state.messages]);
+  const { searchQuery } = await invokeStructured(RewriteSchema, [new SystemMessage(prompt), ...state.messages]);
   return { searchQuery, retryCount: state.retryCount + 1 };
 }

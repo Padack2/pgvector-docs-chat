@@ -1,6 +1,6 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
-import { getChatModel } from "../../llm";
+import { invokeStructured } from "../../llm";
 import type { GraphStateType, GraphStateUpdate } from "../state";
 
 // 분류와 독립 질문 작성을 한 번의 호출로 처리해 LLM 호출 수를 줄인다
@@ -20,8 +20,10 @@ LangChain·LangGraph·에이전트·LLM·코드에 관한 질문은 모두 검�
 검색이 필요하면, "그거 예시는?" 같은 후속 질문도 앞선 대화를 반영해 혼자서 이해되는 질문으로 바꿔 searchQuery에 쓰세요.`;
 
 export async function classify(state: GraphStateType): Promise<GraphStateUpdate> {
-  const model = getChatModel().withStructuredOutput(ClassifySchema);
-  const { isChitchat, searchQuery } = await model.invoke([new SystemMessage(PROMPT), ...state.messages]);
+  const { isChitchat, searchQuery } = await invokeStructured(ClassifySchema, [
+    new SystemMessage(PROMPT),
+    ...state.messages,
+  ]);
   // 체크포인터로 이전 턴 상태가 남아 있어도 이번 질문 기준으로 초기화
   return { needsSearch: !isChitchat, searchQuery, documents: [], retryCount: 0 };
 }

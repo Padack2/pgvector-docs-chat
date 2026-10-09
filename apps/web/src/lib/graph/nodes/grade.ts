@@ -1,6 +1,6 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
-import { getChatModel } from "../../llm";
+import { invokeStructured } from "../../llm";
 import type { GraphStateType, GraphStateUpdate } from "../state";
 import { formatDocuments } from "./retrieve";
 
@@ -17,7 +17,6 @@ export async function grade(state: GraphStateType): Promise<GraphStateUpdate> {
 검색 결과:
 ${formatDocuments(state.documents)}`;
 
-  const model = getChatModel().withStructuredOutput(GradeSchema);
-  const { isSufficient } = await model.invoke([new SystemMessage(prompt), ...state.messages]);
+  const { isSufficient } = await invokeStructured(GradeSchema, [new SystemMessage(prompt), ...state.messages]);
   return { isSufficient };
 }

@@ -1,5 +1,5 @@
 import { SystemMessage } from "@langchain/core/messages";
-import { getChatModel } from "../../llm";
+import { invokeChat } from "../../llm";
 import type { GraphStateType, GraphStateUpdate } from "../state";
 import { formatDocuments } from "./retrieve";
 
@@ -16,6 +16,6 @@ ${formatDocuments(state.documents)}`
     : `${BASE_PROMPT}
 이번 메시지는 문서 검색이 필요 없는 대화입니다. 짧게 응대하고, 필요하면 LangChain 관련 질문을 하도록 안내하세요.`;
 
-  const answer = await getChatModel().invoke([new SystemMessage(prompt), ...state.messages]);
+  const answer = await invokeChat([new SystemMessage(prompt), ...state.messages]);
   return { messages: [answer] };
 }
