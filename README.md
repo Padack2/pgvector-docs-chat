@@ -1,42 +1,156 @@
 # pgvector-docs-chat
 
-LangChain 공식 문서(JS/TS)를 LangGraph + RAG 기반으로 검색하는 챗봇입니다.
+LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangGraph로 질문 분석 → 검색 → 검색 결과 평가 → 재검색 → 답변 흐름을 만들고, 답변마다 참고한 문서를 번호로 인용합니다.
 
-## Stack
+**데모**: https://<배포-URL>
 
-- **Frontend/Backend**: Next.js (App Router)
-- **AI Framework**: LangGraph + LangChain
-- **LLM**: Gemini 3.8 Flash (로컬 개발 시 Ollama 전환 가능)
-- **Vector DB**: PostgreSQL + pgvector (Neon)
-- **Embedding**: Gemini Embedding API (`gemini-embedding-001`, 1536차원)
-- **Deploy**: Vercel
+![질문에 대한 처리 과정과 출처가 인용된 답변](docs/images/demo.png)
 
-## Architecture
-사용자 질문
-↓
-[의도 분류 노드]
-↓ ↓
-문서 검색 (RAG) 단순 답변
-↓
-[검색 품질 판단]
-↓ 불충분 ↓ 충분
-재검색 루프 답변 생성
-↓
-최종 답변
+## 주요 기능
 
-## Getting Started
+- **근거 기반 답변**: 검색한 문서 안에서만 답하고, 근거로 쓴 문서를 `[n]`으로 인용합니다. 문서에 없으면 찾지 못했다고 답합니다.
+- **자기 교정 검색 (Self-RAG)**: 검색 결과가 답하기에 부족하면 검색어를 문서 용어로 다시 써서 최대 3번까지 재검색합니다.
+- **후속 질문 이해**: "그거 예시는?" 같은 질문을 대화 맥락을 반영한 독립 질문으로 바꿔 검색합니다.
+- **처리 과정 표시**: 그래프의 각 단계(검색어, 찾은 청크 수, 평가 결과)를 실시간으로 보여주고, 답변이 시작되면 접어 둡니다.
+- **장애 대응**: 모델 실패 시 다른 모델로 자동 전환하고, 응답이 없으면 시간 제한 후 재시도 버튼을 보여줍니다.
+
+## 아키텍처
+
+### 데이터 파이프라인 (`scripts/`)
+
+```mermaid
+flowchart LR
+  A[docs.langchain.com<br/>페이지별 .md] -->|crawl.ts| B[pages.json<br/>141페이지]
+  B -->|chunk.ts| C[chunks.json<br/>3,049청크]
+  C -->|embed.ts<br/>바뀐 페이지만| D[(Neon Postgres<br/>pgvector HNSW)]
+```
+
+- **청킹**: MDX 태그를 정리한 뒤 헤딩 단위로 섹션을 나누고, 1500자 / 150자 overlap으로 분할합니다. 각 청크 앞에 `제목 > 섹션 > 하위 섹션` 경로를 붙여, 짧은 청크도 어느 문서의 어떤 내용인지 임베딩에 드러나게 했습니다.
+- **임베딩**: `gemini-embedding-001` 1536차원 ([ADR-001](docs/adr/ADR-001-embedding-model.md))
+- **증분 동기화**: DB에 저장된 청크 본문과 비교해 바뀐 페이지만 다시 임베딩합니다. 무료 티어 일일 한도(약 1,000건) 안에서 여러 날에 나눠 이어서 실행할 수 있습니다 ([ADR-002](docs/adr/ADR-002-incremental-sync.md)).
+
+### 질문 처리 (LangGraph, `apps/web/src/lib/graph`)
+
+```mermaid
+flowchart TD
+  START([질문]) --> classify[classify<br/>잡담 여부 + 독립 검색어 작성]
+  classify -->|잡담| generate
+  classify -->|검색 필요| retrieve[retrieve<br/>pgvector 상위 5청크]
+  retrieve --> grade[grade<br/>답하기에 충분한가]
+  grade -->|충분 또는 재검색 3회| generate[generate<br/>출처 인용 답변]
+  grade -->|부족| rewrite[rewrite<br/>검색어 재작성]
+  rewrite --> retrieve
+  generate --> END([답변 스트리밍])
+```
+
+- `POST /api/chat`은 NDJSON 이벤트 스트림으로 응답합니다: 단계 진행(`step`), 답변 토큰(`token`), 출처(`sources`), 실패(`error`).
+- LLM 호출 횟수를 줄이려고 분류와 검색어 작성을 한 번에 처리하고, 검색 결과는 청크별이 아니라 묶어서 한 번에 평가합니다.
+
+## 검색 품질 평가
+
+검색이 실제로 잘 되는지 확인하려고 평가셋을 만들어 측정했습니다 (`pnpm --filter scripts eval`).
+
+- **평가셋** ([`scripts/eval/questions.json`](scripts/eval/questions.json)): 50문항. 한국어 36 / 영어 14, 유형은 API 이름 없이 상황만 설명하는 질문 31, API 이름 질문 12, 에러 메시지 질문 7
+- **정답 기준**: 페이지가 아니라 **섹션 단위**. 같은 페이지의 다른 섹션이 나오면 틀린 것으로 봅니다.
+- **지표**: Hit@k(상위 k개 청크에 정답 섹션이 있는 질문 비율), MRR(첫 정답 순위의 역수 평균). 챗봇은 상위 5개 청크를 답변 근거로 쓰므로 Hit@5가 핵심 지표입니다.
+
+| | 문항 | Hit@1 | Hit@3 | Hit@5 | MRR |
+|---|---:|---:|---:|---:|---:|
+| 전체 | 50 | 78% | 94% | **98%** | 0.858 |
+| 한국어 | 36 | 78% | 97% | 100% | 0.868 |
+| 영어 | 14 | 79% | 86% | 93% | 0.832 |
+| 상황 설명 | 31 | 74% | 94% | 100% | 0.844 |
+| API 이름 | 12 | 92% | 100% | 100% | 0.944 |
+| 에러 메시지 | 7 | 71% | 86% | 86% | 0.771 |
+
+**결론과 판단**
+
+- 한국어 질문으로 영어 문서를 검색해도 Hit@5 100%로, 벡터 검색만으로 충분했습니다.
+- 상위 5개 밖으로 밀린 질문은 문서 전체에서 청크 하나에만 나오는 에러 이름(`ContextOverflowError`) 1건입니다. 드문 식별자에 약하다는 벡터 검색의 알려진 약점이 그대로 드러났습니다.
+- 키워드 검색을 섞는 하이브리드 검색을 검토했지만, 개선 여지가 1문항뿐이라 지금은 도입하지 않았습니다. 병목은 검색보다 답변 생성 쪽에 있다고 보고 있습니다.
+
+**한계**: 질문과 정답을 개발 과정에서 직접 작성해 편향이 있을 수 있습니다. 처음 측정 후 놓친 질문을 검토하다 정답을 좁게 잡은 2문항을 발견해 정답 섹션을 추가했습니다(Hit@5 94% → 98%).
+
+## 운영 이슈와 대응
+
+모두 무료 티어로 운영하면서 겪은 문제입니다.
+
+| 문제 | 대응 |
+|---|---|
+| 임베딩 일일 한도(약 1,000건)로 3천 청크를 하루에 못 넣음 | 바뀐 페이지만 임베딩하는 증분 동기화로 4일에 나눠 적재 ([ADR-002](docs/adr/ADR-002-incremental-sync.md)) |
+| `gemini-3.8-flash` 무료 티어가 하루 20요청이라 질문 몇 개면 429 | `gemini-3.5-flash` → `gemini-3.1-flash-lite` 순으로 자동 전환 ([`llm.ts`](apps/web/src/lib/llm.ts)) |
+| 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 50초 제한 |
+| 스트리밍 도중 실패하면 HTTP 상태 코드로 알릴 수 없음 | `error` 이벤트로 원인별 안내(한도 초과 / 시간 초과 / 기타), 마지막 답변에 재시도 버튼 |
+
+## 기술 스택
+
+- **앱**: Next.js 14 (App Router), React, Tailwind CSS
+- **AI**: LangGraph, LangChain, Gemini (LLM: 3.8 / 3.5 Flash, 임베딩: `gemini-embedding-001`), 로컬 개발 시 Ollama
+- **DB**: PostgreSQL + pgvector (Neon), HNSW 인덱스, 코사인 거리
+- **배포**: Vercel
+- **모노레포**: pnpm workspace (`apps/web`, `scripts`)
+
+## 프로젝트 구조
+
+```
+apps/web/src/
+├── app/
+│   ├── page.tsx              # 채팅 UI (스트림 파싱, 처리 과정, 재시도)
+│   └── api/chat/route.ts     # 그래프 실행 → NDJSON 이벤트 스트림
+├── components/AnswerMarkdown.tsx  # 마크다운 + [n] 인용 배지
+└── lib/
+    ├── graph/                # LangGraph 상태·노드·그래프 정의
+    ├── db/pgvector.ts        # 유사도 검색 (읽기 전용 계정)
+    ├── embedding.ts          # Gemini 임베딩 (저장·검색 공용)
+    └── llm.ts                # LLM 호출, 모델 자동 전환
+scripts/
+├── crawl.ts / chunk.ts / embed.ts  # 데이터 파이프라인
+└── eval.ts, eval/questions.json    # 검색 품질 평가
+docs/
+├── schema.md                 # DB 스키마
+└── adr/                      # 설계 결정 기록
+```
+
+## 로컬 실행
+
+**준비물**: Node.js 24, pnpm, Gemini API 키, pgvector를 쓸 수 있는 Postgres(Neon 등)
 
 ```bash
 pnpm install
-cp apps/web/.env.example apps/web/.env.local
+cp apps/web/.env.example apps/web/.env.local   # 값 채우기
+```
+
+DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 임베딩 저장용(쓰기) 계정과 챗봇용(읽기 전용) 계정을 준비합니다.
+
+```bash
+# 데이터 적재 (data/ 아래에 중간 결과 저장)
+pnpm --filter scripts crawl
+pnpm --filter scripts chunk
+pnpm --filter scripts embed    # 무료 한도에 걸리면 멈춤. 다음 날 다시 실행하면 이어서 진행
+
+# 검색 품질 평가
+pnpm --filter scripts eval
+
+# 챗봇 실행 (http://localhost:3000)
 pnpm dev
 ```
 
-## Environment Variables
+> `node_modules`의 네이티브 바이너리(esbuild, Next SWC)는 설치한 OS용으로만 받아집니다. Windows와 WSL을 오가며 쓴다면 실행할 환경에서 `pnpm install`을 하세요.
 
-```env
-LLM_PROVIDER=          # gemini(기본) | ollama
-GEMINI_API_KEY=
-EMBED_DATABASE_URL=    # 쓰기 계정 (scripts/)
-DATABASE_URL=          # 읽기 전용 계정 (Next.js)
-```
+### 환경 변수 (`apps/web/.env.local`)
+
+| 변수 | 설명 |
+|---|---|
+| `LLM_PROVIDER` | `gemini`(기본) 또는 `ollama`. 임베딩은 항상 Gemini |
+| `GEMINI_API_KEY` | Gemini API 키 |
+| `GEMINI_MODEL` | 첫 번째로 시도할 LLM (기본 `gemini-3.8-flash`). 실패하면 자동 전환 |
+| `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | `LLM_PROVIDER=ollama`일 때만 사용 |
+| `EMBED_DATABASE_URL` | 쓰기 계정. `scripts/embed.ts`에서만 사용 |
+| `DATABASE_URL` | 읽기 전용 계정. 챗봇 검색과 평가에서 사용 |
+
+## 문서
+
+- [DB 스키마](docs/schema.md)
+- [ADR-001: 임베딩 모델과 차원](docs/adr/ADR-001-embedding-model.md)
+- [ADR-002: 증분 동기화](docs/adr/ADR-002-incremental-sync.md)
+- [개발 계획과 진행 상황](plan.md)
