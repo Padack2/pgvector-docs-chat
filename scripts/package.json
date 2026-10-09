@@ -5,7 +5,8 @@
   "scripts": {
     "crawl": "tsx crawl.ts",
     "chunk": "tsx chunk.ts",
-    "embed": "tsx --no-warnings --env-file=../apps/web/.env.local embed.ts"
+    "embed": "tsx --no-warnings --env-file=../apps/web/.env.local embed.ts",
+    "eval": "tsx --no-warnings --env-file=../apps/web/.env.local eval.ts"
   },
   "dependencies": {
     "@langchain/textsplitters": "^1.0.2",
