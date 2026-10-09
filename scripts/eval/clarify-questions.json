@@ -1,0 +1,51 @@
+[
+  { "id": "a01", "shouldAsk": true, "messages": ["메모리는 어떻게 써?"] },
+  { "id": "a02", "shouldAsk": true, "messages": ["스트리밍은 어떻게 구현해?"] },
+  { "id": "a03", "shouldAsk": true, "messages": ["human-in-the-loop은 어떻게 넣어?"] },
+  { "id": "a04", "shouldAsk": true, "messages": ["서브에이전트는 어떻게 만들어?"] },
+  { "id": "a05", "shouldAsk": true, "messages": ["대화 기록을 유지하려면 어떻게 해?"] },
+  { "id": "a06", "shouldAsk": true, "messages": ["How do I add memory to my agent?"] },
+  { "id": "a07", "shouldAsk": true, "messages": ["에이전트 응답을 구조화된 출력으로 받으려면?"] },
+  { "id": "a08", "shouldAsk": true, "messages": ["How do I stream tokens to my React frontend?"] },
+  { "id": "a09", "shouldAsk": true, "messages": ["에이전트가 도구를 실행하기 전에 사람 승인을 받는 방법"] },
+  { "id": "a10", "shouldAsk": true, "messages": ["장기 메모리는 어디에 어떻게 저장해?"] },
+
+  { "id": "c01", "shouldAsk": false, "messages": ["createAgent에 메모리 추가하는 법"] },
+  { "id": "c02", "shouldAsk": false, "messages": ["StateGraph에서 노드 실패 시 재시도 설정"] },
+  { "id": "c03", "shouldAsk": false, "messages": ["createDeepAgent에서 서브에이전트 정의하기"] },
+  { "id": "c04", "shouldAsk": false, "messages": ["LangChain과 LangGraph는 뭐가 달라?"] },
+  { "id": "c05", "shouldAsk": false, "messages": ["SKILL.md 파일 형식 알려줘"] },
+  { "id": "c06", "shouldAsk": false, "messages": ["GraphRecursionError: Recursion limit of 25 reached without hitting a stop condition"] },
+  { "id": "c07", "shouldAsk": false, "messages": ["How do I use interrupt() inside a LangGraph node?"] },
+  { "id": "c08", "shouldAsk": false, "messages": ["Deep Agents에서 human-in-the-loop 설정하는 법"] },
+  { "id": "c09", "shouldAsk": false, "messages": ["initChatModel로 모델 제공자 바꾸기"] },
+  { "id": "c10", "shouldAsk": false, "messages": ["임베딩 차원은 얼마로 하는 게 좋아?"] },
+
+  {
+    "id": "x01",
+    "shouldAsk": false,
+    "messages": [
+      "createAgent로 고객 상담 에이전트를 만들고 있어",
+      "createAgent로 고객 상담 에이전트를 만드시는군요. 어떤 부분이 궁금하세요?",
+      "메모리는 어떻게 붙여?"
+    ]
+  },
+  {
+    "id": "x02",
+    "shouldAsk": false,
+    "messages": [
+      "LangGraph StateGraph로 문서 요약 워크플로우를 만들었어",
+      "StateGraph로 워크플로우를 구성하셨군요. 무엇을 도와드릴까요?",
+      "스트리밍은 어떻게 해?"
+    ]
+  },
+  {
+    "id": "x03",
+    "shouldAsk": false,
+    "messages": [
+      "Deep Agents로 리서치 에이전트를 만드는 중이야",
+      "Deep Agents로 리서치 에이전트를 만드시는군요. 궁금한 점을 말씀해 주세요.",
+      "서브에이전트는 어떻게 만들어?"
+    ]
+  }
+]

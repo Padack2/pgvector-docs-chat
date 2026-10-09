@@ -1,6 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { graph } from "./graph";
+import type { ClarifyRequest } from "./graph/nodes/clarify";
 
 export type Source = { title: string; url: string };
 
@@ -20,6 +21,8 @@ export type ThreadView = {
   messages: ThreadMessage[];
   // 화면에 보이는 분기의 마지막 체크포인트. 다음 질문은 여기서 이어간다
   checkpointId: string | null;
+  // 마지막 질문에서 되물음(clarify)으로 멈춰 있으면 그 질문과 선택지
+  interrupt: ClarifyRequest | null;
 };
 
 // 체크포인트 구조 (턴마다):
@@ -35,7 +38,7 @@ const byCreatedAt = (a: StateSnapshot, b: StateSnapshot) => (a.createdAt ?? "").
 export async function loadThread(threadId: string, checkpointId?: string): Promise<ThreadView | null> {
   const all: StateSnapshot[] = [];
   for await (const snapshot of graph.getStateHistory({ configurable: { thread_id: threadId } })) all.push(snapshot);
-  if (all.length === 0) return checkpointId ? null : { messages: [], checkpointId: null };
+  if (all.length === 0) return checkpointId ? null : { messages: [], checkpointId: null, interrupt: null };
 
   const byId = new Map(all.map((s) => [idOf(s), s]));
   const children = new Map<string, StateSnapshot[]>();
@@ -90,5 +93,6 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
     };
   });
 
-  return { messages, checkpointId: idOf(leaf) };
+  const interrupt = (leaf.tasks.flatMap((task) => task.interrupts ?? [])[0]?.value ?? null) as ClarifyRequest | null;
+  return { messages, checkpointId: idOf(leaf), interrupt };
 }

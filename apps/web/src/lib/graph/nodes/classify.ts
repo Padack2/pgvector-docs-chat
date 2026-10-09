@@ -1,7 +1,7 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { invokeStructured } from "../../llm";
-import type { GraphStateType, GraphStateUpdate } from "../state";
+import { FRAMEWORKS, type GraphStateType, type GraphStateUpdate } from "../state";
 
 // 분류와 독립 질문 작성을 한 번의 호출로 처리해 LLM 호출 수를 줄인다
 const ClassifySchema = z.object({
@@ -10,6 +10,11 @@ const ClassifySchema = z.object({
   searchQuery: z
     .string()
     .describe("대화 맥락 없이도 이해되도록 마지막 질문을 풀어 쓴 독립 질문(사용자와 같은 언어). isChitchat이 true면 빈 문자열"),
+  frameworkCandidates: z
+    .array(z.enum(FRAMEWORKS))
+    .describe(
+      "답이 프레임워크마다 달라지는데 어느 것인지 알 수 없을 때만 해당될 수 있는 프레임워크를 모두 나열. 그 외에는 빈 배열",
+    ),
 });
 
 // 검색을 건너뛰면 근거 없이 답(환각)하게 되므로, 애매하면 검색 쪽으로 기울인다
@@ -17,13 +22,26 @@ const PROMPT = `당신은 LangChain JS/TS 공식 문서 검색 챗봇의 라우�
 대화의 마지막 사용자 메시지를 보고 문서 검색이 필요한지 판단하세요.
 LangChain·LangGraph·에이전트·LLM·코드에 관한 질문은 모두 검색이 필요합니다(isChitchat: false).
 인사, 감사, 잡담처럼 문서가 전혀 필요 없을 때만 isChitchat이 true이고, 애매하면 false로 하세요.
-검색이 필요하면, "그거 예시는?" 같은 후속 질문도 앞선 대화를 반영해 혼자서 이해되는 질문으로 바꿔 searchQuery에 쓰세요.`;
+검색이 필요하면, "그거 예시는?" 같은 후속 질문도 앞선 대화를 반영해 혼자서 이해되는 질문으로 바꿔 searchQuery에 쓰세요.
+
+frameworkCandidates: 문서는 langchain(createAgent·미들웨어), langgraph(StateGraph·그래프), deepagents(createDeepAgent)로 나뉘고,
+메모리·스트리밍·human-in-the-loop·서브에이전트처럼 같은 주제가 여러 프레임워크에 따로 있습니다.
+- 답이 프레임워크마다 다르고, 질문과 앞선 대화 어디에도 프레임워크를 알 단서(이름, createAgent·StateGraph 같은 API)가 없을 때만 후보를 모두 나열하세요. 예: "메모리는 어떻게 써?"
+- 프레임워크를 밝혔거나 API 이름으로 알 수 있거나, 비교 질문이거나, 특정 프레임워크와 무관하면 빈 배열입니다. 예: "createAgent에 메모리 추가", "LangChain과 LangGraph 차이"
+- 확실하지 않으면 빈 배열로 하세요. 사용자에게 되묻는 것은 꼭 필요할 때만 합니다.`;
 
 export async function classify(state: GraphStateType): Promise<GraphStateUpdate> {
-  const { isChitchat, searchQuery } = await invokeStructured(ClassifySchema, [
+  const { isChitchat, searchQuery, frameworkCandidates } = await invokeStructured(ClassifySchema, [
     new SystemMessage(PROMPT),
     ...state.messages,
   ]);
   // 체크포인터로 이전 턴 상태가 남아 있어도 이번 질문 기준으로 초기화
-  return { needsSearch: !isChitchat, searchQuery, documents: [], retryCount: 0 };
+  return {
+    needsSearch: !isChitchat,
+    searchQuery,
+    frameworkCandidates: isChitchat ? [] : Array.from(new Set(frameworkCandidates)),
+    framework: null,
+    documents: [],
+    retryCount: 0,
+  };
 }

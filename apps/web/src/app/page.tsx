@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
+import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
 import type { ThreadView } from "@/lib/threads";
 
 // 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고)
 type Step =
-  | { node: "classify"; needsSearch: boolean; searchQuery: string }
+  | { node: "classify"; needsSearch: boolean; searchQuery: string; needsClarify?: boolean }
+  | { node: "clarify"; choice: string | null }
   | { node: "retrieve"; count: number }
   | { node: "grade"; isSufficient: boolean }
   | { node: "rewrite"; searchQuery: string };
@@ -17,18 +19,21 @@ type Message = {
   steps?: Step[];
   sources?: Source[];
   error?: string;
+  // 되물음으로 그래프가 멈춰 있으면 그 질문과 선택지 (assistant만)
+  clarify?: ClarifyRequest;
   // 질문(user)만: 수정·재시도 때 fork할 체크포인트와 같은 위치의 분기들 (lib/threads.ts)
   forkFrom?: string;
   branches?: string[];
   branchIndex?: number;
 };
 
-// /api/chat 요청: 새 질문만 보내고, 대화 기록은 서버의 체크포인트(threadId)에 있다
-type ChatRequest = { threadId: string; message: string; checkpointId?: string };
+// /api/chat 요청: 새 질문(message) 또는 되물음에 대한 선택(resume)만 보내고, 대화 기록은 서버의 체크포인트(threadId)에 있다
+type ChatRequest = { threadId: string; message?: string; resume?: string; checkpointId?: string };
 
 // /api/chat의 NDJSON 이벤트 (route.ts 주석 참고)
 type ChatEvent =
   | ({ type: "step" } & Step)
+  | ({ type: "interrupt" } & ClarifyRequest)
   | { type: "token"; text: string }
   | { type: "sources"; sources: Source[] }
   | { type: "error"; message: string };
@@ -70,11 +75,15 @@ async function fetchThread(threadId: string, checkpointId?: string): Promise<Thr
   return res.ok ? res.json() : null;
 }
 
-// 서버에 저장된 대화를 화면 메시지로. 마지막 질문에 답이 없으면 그 실행이 실패한 것이라 재시도할 수 있게 표시한다
-function toMessages(view: ThreadView, failedRun?: Pick<Message, "steps" | "error">): Message[] {
+// 서버에 저장된 대화를 화면 메시지로. 마지막 질문에 답이 없으면 되물음으로 멈춰 있거나 실행이 실패한 것이다
+function toMessages(view: ThreadView, run?: Pick<Message, "steps" | "error">): Message[] {
   const messages: Message[] = view.messages.map((m) => ({ ...m }));
   if (messages.at(-1)?.role === "user") {
-    messages.push({ role: "assistant", content: "", error: "답변을 받지 못한 질문입니다. 다시 시도하세요.", ...failedRun });
+    messages.push(
+      view.interrupt
+        ? { role: "assistant", content: "", clarify: view.interrupt, steps: run?.steps }
+        : { role: "assistant", content: "", error: "답변을 받지 못한 질문입니다. 다시 시도하세요.", ...run },
+    );
   }
   return messages;
 }
@@ -98,7 +107,10 @@ function groupSources(sources: Source[]) {
 function describeStep(step: Step) {
   switch (step.node) {
     case "classify":
-      return step.needsSearch ? `질문 분석 · 검색어 “${step.searchQuery}”` : "질문 분석 · 문서 검색 없이 답변";
+      if (!step.needsSearch) return "질문 분석 · 문서 검색 없이 답변";
+      return step.needsClarify ? "질문 분석 · 프레임워크 확인 필요" : `질문 분석 · 검색어 “${step.searchQuery}”`;
+    case "clarify":
+      return step.choice ? `되물음 · ${step.choice} 문서에서 검색` : "되물음 · 전체 문서에서 검색";
     case "retrieve":
       return `문서 검색 · 관련 청크 ${step.count}개`;
     case "grade":
@@ -111,7 +123,11 @@ function describeStep(step: Step) {
 // 마지막으로 끝난 노드를 보고 지금 진행 중인 일을 보여준다
 function describePending(last: Step | undefined) {
   if (!last) return "질문을 분석하고 있어요";
-  if (last.node === "classify") return last.needsSearch ? "문서를 찾고 있어요" : "답변을 쓰고 있어요";
+  if (last.node === "classify") {
+    if (!last.needsSearch) return "답변을 쓰고 있어요";
+    return last.needsClarify ? "어느 프레임워크인지 확인하고 있어요" : "문서를 찾고 있어요";
+  }
+  if (last.node === "clarify") return "문서를 찾고 있어요";
   if (last.node === "retrieve") return "검색 결과를 평가하고 있어요";
   if (last.node === "rewrite") return "다시 검색하고 있어요";
   // 부족해도 재검색 한도를 다 썼으면 바로 답변하므로 어느 쪽인지 단정하지 않는다
@@ -142,6 +158,9 @@ function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
     );
 
   const searches = steps.filter((step) => step.node === "retrieve").length;
+  // 되물음에 아직 답하지 않아 검색 전에 멈춘 상태
+  const awaitingChoice =
+    steps.some((step) => step.node === "classify" && step.needsClarify) && !steps.some((step) => step.node === "clarify");
   return (
     <details className="group text-sm text-muted">
       <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 hover:text-foreground [&::-webkit-details-marker]:hidden">
@@ -157,10 +176,32 @@ function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
             clipRule="evenodd"
           />
         </svg>
-        처리 과정 · {searches > 0 ? `검색 ${searches}회` : "검색 없음"}
+        처리 과정 · {searches > 0 ? `검색 ${searches}회` : awaitingChoice ? "프레임워크 선택 대기" : "검색 없음"}
       </summary>
       <div className="mt-2">{list}</div>
     </details>
+  );
+}
+
+// 질문이 여러 프레임워크에 해당될 때 그래프가 멈추고 보여주는 선택지. onSelect가 없으면(진행 중 등) 고를 수 없다
+function ClarifyPrompt({ request, onSelect }: { request: ClarifyRequest; onSelect?: (value: string) => void }) {
+  return (
+    <div className="rounded-lg border border-line bg-surface px-4 py-3">
+      <p className="font-semibold">{request.question}</p>
+      <p className="mt-0.5 text-sm text-muted">같은 주제가 프레임워크마다 따로 문서화돼 있어요. 고르면 그 문서에서만 찾습니다.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {request.options.map((option) => (
+          <button
+            key={option.value}
+            onClick={() => onSelect?.(option.value)}
+            disabled={!onSelect}
+            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent hover:text-accent disabled:opacity-35 disabled:hover:border-line disabled:hover:text-inherit focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -254,12 +295,12 @@ export default function Home() {
       setThreadId(id);
       window.history.replaceState(null, "", `?thread=${id}`);
     }
-    // 마지막 질문이 실패한 채 새 질문을 보내면 실패한 질문을 대신하도록 그 직전에서 이어간다
+    // 마지막 질문이 실패했거나 되물음에 답하지 않은 채 새 질문을 보내면, 그 질문을 대신하도록 그 직전에서 이어간다
     const last = messages.at(-1);
-    const failedQuestion = last?.error ? messages.at(-2) : undefined;
-    const base = failedQuestion ? messages.slice(0, -2) : messages;
+    const replaced = last?.error || last?.clarify ? messages.at(-2) : undefined;
+    const base = replaced ? messages.slice(0, -2) : messages;
     await ask(
-      { threadId: id, message: question, checkpointId: failedQuestion?.forkFrom ?? checkpointId ?? undefined },
+      { threadId: id, message: question, checkpointId: replaced?.forkFrom ?? checkpointId ?? undefined },
       [...base, { role: "user", content: question }],
     );
   }
@@ -268,9 +309,17 @@ export default function Home() {
   function retry() {
     const question = messages.at(-2);
     if (isLoading || !threadId || !question) return;
-    // forkFrom이 없으면 서버가 질문을 저장하기 전에 실패한 것이라 같은 요청을 다시 보낸다
+    // forkFrom이 없으면 서버가 질문을 저장하기 전에 실패한 것이라 같은 요청을 다시 보낸다.
+    // 되물음 재개가 실패했어도 질문부터 다시 실행한다 (다시 되묻는다)
     const checkpoint = question.forkFrom ?? lastRequest.current?.checkpointId;
     ask({ threadId, message: question.content, checkpointId: checkpoint }, messages.slice(0, -1));
+  }
+
+  // 되물음에 대한 선택으로 멈춘 그래프를 재개한다. 처리 과정은 멈추기 전 단계에 이어 붙인다
+  function resumeWith(value: string) {
+    const paused = messages.at(-1);
+    if (isLoading || !threadId || !paused?.clarify) return;
+    ask({ threadId, resume: value, checkpointId: checkpointId ?? undefined }, messages.slice(0, -1), paused.steps);
   }
 
   // 질문을 고치면 그 질문 직전 체크포인트에서 새 분기로 실행한다
@@ -300,20 +349,22 @@ export default function Home() {
 
   // shown은 user 메시지로 끝난다. 그 뒤에 빈 assistant 메시지를 붙여 스트리밍으로 채우고,
   // 끝나면 서버에 저장된 대화를 다시 불러와 분기 정보(forkFrom 등)를 받는다
-  async function ask(request: ChatRequest, shown: Message[]) {
+  async function ask(request: ChatRequest, shown: Message[], previousSteps: Step[] = []) {
     lastRequest.current = request;
-    setMessages([...shown, { role: "assistant", content: "" }]);
+    setMessages([...shown, { role: "assistant", content: "", steps: previousSteps }]);
     setIsLoading(true);
     // 다시 불러온 대화에는 처리 과정이 없으므로 이번 실행의 것을 옮겨 붙인다
-    const run: Pick<Message, "steps" | "error"> = { steps: [] };
+    const run: Pick<Message, "steps" | "error"> = { steps: previousSteps };
     // 답변도 에러도 없이 스트림이 끝나면(서버 강제 종료 등) 실패로 표시해 재시도할 수 있게 한다
     let finished = false;
     try {
       await streamChat(request, (event) => {
-        if (event.type === "token" || event.type === "error") finished = true;
+        if (event.type === "token" || event.type === "error" || event.type === "interrupt") finished = true;
         if (event.type === "step") {
           run.steps = [...run.steps!, event];
           updateLast((m) => ({ ...m, steps: run.steps }));
+        } else if (event.type === "interrupt") {
+          updateLast((m) => ({ ...m, clarify: { question: event.question, options: event.options } }));
         } else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
         else if (event.type === "sources") updateLast((m) => ({ ...m, sources: event.sources }));
         else {
@@ -469,8 +520,14 @@ export default function Home() {
             <article key={i} className="space-y-4">
               <StepTrace
                 steps={message.steps ?? []}
-                live={isLoading && i === messages.length - 1 && !message.content && !message.error}
+                live={isLoading && i === messages.length - 1 && !message.content && !message.error && !message.clarify}
               />
+              {message.clarify && (
+                <ClarifyPrompt
+                  request={message.clarify}
+                  onSelect={i === messages.length - 1 && !isLoading ? resumeWith : undefined}
+                />
+              )}
               {message.content && <AnswerMarkdown content={message.content} sources={message.sources} />}
               {message.error && (
                 <ErrorNotice
