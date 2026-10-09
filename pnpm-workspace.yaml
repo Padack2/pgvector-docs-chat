@@ -1,6 +1,16 @@
 packages:
   - "apps/*"
   - "scripts"
+# Windows와 WSL이 같은 node_modules를 쓰므로 두 OS의 네이티브 바이너리(esbuild, Next SWC 등)를 모두 설치한다.
+# 반드시 Windows에서 install 할 것: WSL이 만든 심볼릭 링크는 Windows에서 읽지 못하지만 Windows의 junction은 WSL에서 읽힌다
+supportedArchitectures:
+  os: [current, linux, win32]
+  cpu: [current, x64]
+  # Windows에서는 current가 libc를 거르지 않아 musl용까지 받으므로 WSL(Ubuntu)의 glibc만 지정
+  libc: [glibc]
+# pnpm run 전에 자동으로 재설치하지 않고 경고만 한다. WSL에서 재설치되면 Windows에서 node_modules를 읽지 못하게 된다
+verifyDepsBeforeRun: warn
 allowBuilds:
-  esbuild: set this to true or false
+  # 바이너리는 플랫폼별 optional 패키지(@esbuild/*)로 설치되므로 postinstall은 필요 없다
+  esbuild: false
   unrs-resolver: true
