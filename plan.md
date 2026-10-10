@@ -56,7 +56,7 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 설계
 - 지금은 클라이언트가 매 요청에 대화 전체를 보낸다 → `threadId` + 새 메시지만 보내고, 기록은 checkpointer가 가진다
 - `@langchain/langgraph-checkpoint-postgres`의 `PostgresSaver`를 Neon에 연결. 챗봇 계정(`DATABASE_URL`)은 읽기 전용이므로 checkpoint 테이블에만 쓸 수 있는 계정을 따로 둔다 (문서 테이블 쓰기 권한은 주지 않음)
-- 분기는 `getStateHistory`로 수정할 질문 직전 체크포인트를 찾고 `checkpoint_id`를 지정해 다시 실행(fork). 공식 프론트엔드 SDK(`useStream`)는 Agent Server 전제라 쓰지 않고 route에서 직접 구현
+- 분기는 `getStateHistory`로 수정할 질문 직전 체크포인트를 찾고 `checkpoint_id`를 지정해 다시 실행(fork). 공식 프론트엔드 SDK(`useStream`)는 Agent Server(유료 플랜) 또는 분기 기능이 없는 커스텀 전송만 가능해 쓰지 않고 route에서 직접 구현 ([ADR-005](docs/adr/ADR-005-conversation-persistence.md))
 - 서버리스라 `PostgresSaver.setup()`(테이블 생성)은 요청마다 하지 않고 스크립트로 한 번 실행
 
 작업
@@ -93,13 +93,13 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 
 설계
 - 지금의 retrieve → grade → rewrite 반복을 하위 질문 하나를 조사하는 서브그래프로 분리하고, 단일 질문도 같은 서브그래프를 1번 실행 (코드 경로 하나)
-- classify(또는 별도 plan 노드)가 하위 질문 1~3개를 만들고, `Send`로 서브그래프를 하위 질문 수만큼 병렬 실행
+- classify가 출력 필드로 하위 질문 1~3개를 함께 만들고 (별도 노드는 LLM 호출이 늘어 제외, ADR-007), `Send`로 서브그래프를 하위 질문 수만큼 병렬 실행
 - 각 분기 결과는 reducer로 합치고 중복 청크를 제거, 답변 컨텍스트는 상한(예: 8청크)을 둠. 인용 번호는 합친 순서 기준
 - 처리 과정 UI는 `subgraphs: true` 스트림의 namespace로 분기별 단계를 구분해 표시
 - 하위 질문마다 grade 호출이 생겨 LLM 호출이 가장 많이 늘어남 → 하위 질문 최대 3개, 분당 한도는 모델 자동 전환(Phase 4 이후 llm.ts)에 의존
 
 작업
-- [ ] 평가셋에 비교·복합 질문 10개 추가 (하위 주제별 정답 섹션), 지표: 모든 하위 주제의 정답 섹션이 답변 컨텍스트에 들어간 비율 → 분해 전 베이스라인 먼저 측정
+- [x] 평가셋에 비교·복합 질문 10개 추가 (하위 주제별 정답 섹션), 지표: 모든 하위 주제의 정답 섹션이 답변 컨텍스트에 들어간 비율 → 분해 전 베이스라인 먼저 측정 — `scripts/eval-compound.ts`, 검색 단계만 비교(grade·rewrite 제외). 기준선 2/10, 하위 주제 12/20 (2회 동일). 상위 10개·MMR·섹션 중복 제거로는 최대 4/10이라 분해로 결정, 분해는 classify 출력 필드로 해 LLM 호출 수 유지 ([ADR-007](docs/adr/ADR-007-compound-question-retrieval.md))
 - [ ] 검색 반복 구간을 서브그래프로 분리 → 확인: 기존 평가 결과(Hit@5 98%)와 단일 질문 동작이 그대로인지
 - [ ] 질문 분해 출력 + `Send` 병렬 실행 + 결과 병합 reducer
 - [ ] 처리 과정 UI에 분기별 단계 표시

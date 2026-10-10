@@ -85,7 +85,7 @@ flowchart TD
 
 - 한국어 질문으로 영어 문서를 검색해도 Hit@5 100%로, 벡터 검색만으로 충분했습니다.
 - 상위 5개 밖으로 밀린 질문은 문서 전체에서 청크 하나에만 나오는 에러 이름(`ContextOverflowError`) 1건입니다. 드문 식별자에 약하다는 벡터 검색의 알려진 약점이 그대로 드러났습니다.
-- 키워드 검색을 섞는 하이브리드 검색을 검토했지만, 개선 여지가 1문항뿐이라 지금은 도입하지 않았습니다. 병목은 검색보다 답변 생성 쪽에 있다고 보고 있습니다.
+- 키워드 검색을 섞는 하이브리드 검색을 검토했지만, 개선 여지가 1문항뿐이라 지금은 도입하지 않았습니다 ([ADR-004](docs/adr/ADR-004-hybrid-search-deferred.md)).
 
 **한계**: 질문과 정답을 개발 과정에서 직접 작성해 편향이 있을 수 있습니다. 처음 측정 후 놓친 질문을 검토하다 정답을 좁게 잡은 2문항을 발견해 정답 섹션을 추가했습니다(Hit@5 94% → 98%).
 
@@ -200,4 +200,9 @@ pnpm dev
 - [DB 스키마](docs/schema.md)
 - [ADR-001: 임베딩 모델과 차원](docs/adr/ADR-001-embedding-model.md)
 - [ADR-002: 증분 동기화](docs/adr/ADR-002-incremental-sync.md)
+- [ADR-003: LLM 실패 시 후순위 모델로 즉시 전환](docs/adr/ADR-003-llm-model-fallback.md)
+- [ADR-004: 하이브리드 검색 도입 보류](docs/adr/ADR-004-hybrid-search-deferred.md)
+- [ADR-005: 대화 상태 서버 저장과 분기 직접 구현](docs/adr/ADR-005-conversation-persistence.md)
+- [ADR-006: 대상 프레임워크 확인 후 검색 범위 제한](docs/adr/ADR-006-framework-clarification.md)
+- [ADR-007: 복합 질문 분해 후 개별 검색](docs/adr/ADR-007-compound-question-retrieval.md)
 - [개발 계획과 진행 상황](plan.md)
