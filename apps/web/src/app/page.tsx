@@ -448,7 +448,8 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="flex-1 space-y-8 overflow-y-auto py-8">
+          {/* 스크롤바가 본문 옆에 떠 있지 않고 우측 패널 경계선에 붙도록 좌우 여백까지 스크롤 영역으로 쓴다 */}
+          <div className="-mx-4 flex-1 space-y-8 overflow-y-auto px-4 py-8 [scrollbar-gutter:stable] sm:-mx-6 sm:px-6">
           {/* 저장된 대화를 불러오는 동안에는 첫 화면을 띄우지 않는다 */}
           {messages.length === 0 && !isLoading && (
             <section className="pt-[12vh]">

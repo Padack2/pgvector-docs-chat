@@ -35,3 +35,32 @@ body {
   color: var(--foreground);
   background: var(--background);
 }
+
+/* 스크롤바를 테마 색에 맞춘 얇은 막대로 (채팅 영역, 코드 블록) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+*:hover {
+  scrollbar-color: var(--muted) transparent;
+}
+
+/* scrollbar-color를 지원하지 않는 Safari용 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: var(--line);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
