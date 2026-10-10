@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
+import { GraphPanel, type GraphRun, type NodeName } from "@/components/GraphPanel";
 import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
 import type { ThreadView } from "@/lib/threads";
 
@@ -17,6 +18,8 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   steps?: Step[];
+  // 시작했지만 아직 끝나지 않은 노드 (assistant만). 실패하면 실패한 노드로 남는다
+  activeNode?: NodeName;
   sources?: Source[];
   error?: string;
   // 되물음으로 그래프가 멈춰 있으면 그 질문과 선택지 (assistant만)
@@ -32,6 +35,7 @@ type ChatRequest = { threadId: string; message?: string; resume?: string; checkp
 
 // /api/chat의 NDJSON 이벤트 (route.ts 주석 참고)
 type ChatEvent =
+  | { type: "start"; node: NodeName }
   | ({ type: "step" } & Step)
   | ({ type: "interrupt" } & ClarifyRequest)
   | { type: "token"; text: string }
@@ -76,7 +80,7 @@ async function fetchThread(threadId: string, checkpointId?: string): Promise<Thr
 }
 
 // 서버에 저장된 대화를 화면 메시지로. 마지막 질문에 답이 없으면 되물음으로 멈춰 있거나 실행이 실패한 것이다
-function toMessages(view: ThreadView, run?: Pick<Message, "steps" | "error">): Message[] {
+function toMessages(view: ThreadView, run?: Pick<Message, "steps" | "error" | "activeNode">): Message[] {
   const messages: Message[] = view.messages.map((m) => ({ ...m }));
   if (messages.at(-1)?.role === "user") {
     messages.push(
@@ -183,6 +187,22 @@ function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
   );
 }
 
+// 그래프 패널에 그릴 실행. 처리 과정이 없으면(불러온 대화의 지난 답변 등) 빈 그래프를 보여준다
+function toGraphRun(message: Message | undefined, live: boolean): GraphRun | undefined {
+  if (message?.role !== "assistant") return undefined;
+  const steps = message.steps ?? [];
+  if (!live && steps.length === 0 && !message.activeNode && !message.clarify) return undefined;
+  const path: NodeName[] = steps.map((step) => step.node);
+  // sources는 답변이 끝난 뒤에 오므로 끝까지 실행된 것이다
+  if (message.sources) path.push("generate");
+  const current: GraphRun["current"] = message.activeNode
+    ? { node: message.activeNode, state: live ? "running" : "failed" }
+    : message.clarify
+      ? { node: "clarify", state: "waiting" }
+      : undefined;
+  return { path, current, done: !!message.sources };
+}
+
 // 질문이 여러 프레임워크에 해당될 때 그래프가 멈추고 보여주는 선택지. onSelect가 없으면(진행 중 등) 고를 수 없다
 function ClarifyPrompt({ request, onSelect }: { request: ClarifyRequest; onSelect?: (value: string) => void }) {
   return (
@@ -269,7 +289,7 @@ export default function Home() {
       .finally(() => setIsLoading(false));
   }, []);
 
-  function showView(view: ThreadView, failedRun?: Pick<Message, "steps" | "error">) {
+  function showView(view: ThreadView, failedRun?: Pick<Message, "steps" | "error" | "activeNode">) {
     setMessages(toMessages(view, failedRun));
     setCheckpointId(view.checkpointId);
   }
@@ -354,19 +374,32 @@ export default function Home() {
     setMessages([...shown, { role: "assistant", content: "", steps: previousSteps }]);
     setIsLoading(true);
     // 다시 불러온 대화에는 처리 과정이 없으므로 이번 실행의 것을 옮겨 붙인다
-    const run: Pick<Message, "steps" | "error"> = { steps: previousSteps };
+    const run: Pick<Message, "steps" | "error" | "activeNode"> = { steps: previousSteps };
     // 답변도 에러도 없이 스트림이 끝나면(서버 강제 종료 등) 실패로 표시해 재시도할 수 있게 한다
     let finished = false;
     try {
       await streamChat(request, (event) => {
         if (event.type === "token" || event.type === "error" || event.type === "interrupt") finished = true;
-        if (event.type === "step") {
+        if (event.type === "start") {
+          run.activeNode = event.node;
+          updateLast((m) => ({ ...m, activeNode: event.node }));
+        } else if (event.type === "step") {
           run.steps = [...run.steps!, event];
-          updateLast((m) => ({ ...m, steps: run.steps }));
+          if (run.activeNode === event.node) run.activeNode = undefined;
+          updateLast((m) => ({ ...m, steps: run.steps, activeNode: run.activeNode }));
         } else if (event.type === "interrupt") {
-          updateLast((m) => ({ ...m, clarify: { question: event.question, options: event.options } }));
+          run.activeNode = undefined;
+          updateLast((m) => ({
+            ...m,
+            activeNode: undefined,
+            clarify: { question: event.question, options: event.options },
+          }));
         } else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
-        else if (event.type === "sources") updateLast((m) => ({ ...m, sources: event.sources }));
+        else if (event.type === "sources") {
+          // 답변(generate)이 끝난 뒤에 오므로 실행이 끝까지 간 것이다
+          run.activeNode = undefined;
+          updateLast((m) => ({ ...m, activeNode: undefined, sources: event.sources }));
+        }
         else {
           run.error = event.message;
           updateLast((m) => ({ ...m, error: event.message }));
@@ -389,203 +422,216 @@ export default function Home() {
     }
   }
 
+  const graphRun = toGraphRun(messages.at(-1), isLoading);
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     send(input.trim());
   }
 
   return (
-    <main className="mx-auto flex h-dvh max-w-[44rem] flex-col px-4 sm:px-6">
-      <header className="flex items-baseline justify-between gap-4 border-b border-line py-4">
-        <h1 className="text-[17px] font-semibold tracking-tight">LangChain Docs Chat</h1>
-        <div className="flex items-baseline gap-4">
-          <p className="hidden text-sm text-muted sm:block">JS/TS 공식 문서 기준</p>
-          {messages.length > 0 && (
-            <button
-              onClick={startNewChat}
-              disabled={isLoading}
-              className="text-sm font-semibold text-accent hover:underline disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              새 대화
-            </button>
+    <div className="flex h-dvh justify-center">
+      <main className="flex h-dvh w-full max-w-[44rem] flex-col px-4 sm:px-6">
+        <header className="flex items-baseline justify-between gap-4 border-b border-line py-4">
+          <h1 className="text-[17px] font-semibold tracking-tight">LangChain Docs Chat</h1>
+          <div className="flex items-baseline gap-4">
+            <p className="hidden text-sm text-muted sm:block">JS/TS 공식 문서 기준</p>
+            {messages.length > 0 && (
+              <button
+                onClick={startNewChat}
+                disabled={isLoading}
+                className="text-sm font-semibold text-accent hover:underline disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                새 대화
+              </button>
+            )}
+          </div>
+        </header>
+
+        <div className="flex-1 space-y-8 overflow-y-auto py-8">
+          {/* 저장된 대화를 불러오는 동안에는 첫 화면을 띄우지 않는다 */}
+          {messages.length === 0 && !isLoading && (
+            <section className="pt-[12vh]">
+              <h2 className="text-2xl font-semibold leading-snug tracking-tight sm:text-[28px]">
+                LangChain을 쓰다 막힌 부분을 물어보세요.
+              </h2>
+              <p className="mt-3 leading-relaxed text-muted">
+                LangChain, LangGraph, Deep Agents 공식 문서에서 근거를 찾아 답하고, 어느 문서를 참고했는지 함께 보여 줍니다.
+              </p>
+              <div className="mt-8 flex flex-col items-start gap-2">
+                {EXAMPLES.map((example) => (
+                  <button
+                    key={example}
+                    onClick={() => send(example)}
+                    className="rounded-lg border border-line bg-surface px-4 py-2.5 text-left text-[15px] hover:border-accent hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </section>
           )}
-        </div>
-      </header>
 
-      <div className="flex-1 space-y-8 overflow-y-auto py-8">
-        {/* 저장된 대화를 불러오는 동안에는 첫 화면을 띄우지 않는다 */}
-        {messages.length === 0 && !isLoading && (
-          <section className="pt-[12vh]">
-            <h2 className="text-2xl font-semibold leading-snug tracking-tight sm:text-[28px]">
-              LangChain을 쓰다 막힌 부분을 물어보세요.
-            </h2>
-            <p className="mt-3 leading-relaxed text-muted">
-              LangChain, LangGraph, Deep Agents 공식 문서에서 근거를 찾아 답하고, 어느 문서를 참고했는지 함께 보여 줍니다.
-            </p>
-            <div className="mt-8 flex flex-col items-start gap-2">
-              {EXAMPLES.map((example) => (
-                <button
-                  key={example}
-                  onClick={() => send(example)}
-                  className="rounded-lg border border-line bg-surface px-4 py-2.5 text-left text-[15px] hover:border-accent hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {messages.map((message, i) =>
-          message.role === "user" ? (
-            <div key={i} className="flex flex-col items-end gap-1">
-              {editing?.index === i ? (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    submitEdit();
-                  }}
-                  className="w-full max-w-[85%] space-y-2"
-                >
-                  <label htmlFor={`edit-${i}`} className="sr-only">
-                    질문 수정
-                  </label>
-                  <textarea
-                    id={`edit-${i}`}
-                    value={editing.text}
-                    onChange={(e) => setEditing({ index: i, text: e.target.value })}
-                    rows={3}
-                    autoFocus
-                    className="w-full resize-y rounded-xl border border-accent bg-surface px-4 py-2.5 leading-relaxed outline-none"
-                  />
-                  <div className="flex justify-end gap-2">
+          {messages.map((message, i) =>
+            message.role === "user" ? (
+              <div key={i} className="flex flex-col items-end gap-1">
+                {editing?.index === i ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      submitEdit();
+                    }}
+                    className="w-full max-w-[85%] space-y-2"
+                  >
+                    <label htmlFor={`edit-${i}`} className="sr-only">
+                      질문 수정
+                    </label>
+                    <textarea
+                      id={`edit-${i}`}
+                      value={editing.text}
+                      onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                      rows={3}
+                      autoFocus
+                      className="w-full resize-y rounded-xl border border-accent bg-surface px-4 py-2.5 leading-relaxed outline-none"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(null)}
+                        className="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!editing.text.trim()}
+                        className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                      >
+                        다시 묻기
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-soft px-4 py-2.5 leading-relaxed">
+                    {message.content}
+                  </p>
+                )}
+                {/* 서버에 저장된 질문만 수정·분기 전환 가능 (forkFrom은 대화를 다시 불러올 때 받는다) */}
+                {editing?.index !== i && message.forkFrom && (
+                  <div className="flex items-center gap-0.5 text-sm text-muted">
+                    {message.branches && message.branches.length > 1 && (
+                      <>
+                        <button
+                          onClick={() => switchBranch(message, message.branchIndex! - 1)}
+                          disabled={isLoading || message.branchIndex === 0}
+                          aria-label="이전 분기"
+                          className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          ‹
+                        </button>
+                        <span className="tabular-nums">
+                          {message.branchIndex! + 1}/{message.branches.length}
+                        </span>
+                        <button
+                          onClick={() => switchBranch(message, message.branchIndex! + 1)}
+                          disabled={isLoading || message.branchIndex === message.branches.length - 1}
+                          aria-label="다음 분기"
+                          className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          ›
+                        </button>
+                      </>
+                    )}
                     <button
-                      type="button"
-                      onClick={() => setEditing(null)}
-                      className="rounded-lg px-3 py-1.5 text-sm text-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      onClick={() => setEditing({ index: i, text: message.content })}
+                      disabled={isLoading}
+                      className="ml-1 rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                     >
-                      취소
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!editing.text.trim()}
-                      className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                    >
-                      다시 묻기
+                      수정
                     </button>
                   </div>
-                </form>
-              ) : (
-                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-soft px-4 py-2.5 leading-relaxed">
-                  {message.content}
-                </p>
-              )}
-              {/* 서버에 저장된 질문만 수정·분기 전환 가능 (forkFrom은 대화를 다시 불러올 때 받는다) */}
-              {editing?.index !== i && message.forkFrom && (
-                <div className="flex items-center gap-0.5 text-sm text-muted">
-                  {message.branches && message.branches.length > 1 && (
-                    <>
-                      <button
-                        onClick={() => switchBranch(message, message.branchIndex! - 1)}
-                        disabled={isLoading || message.branchIndex === 0}
-                        aria-label="이전 분기"
-                        className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                      >
-                        ‹
-                      </button>
-                      <span className="tabular-nums">
-                        {message.branchIndex! + 1}/{message.branches.length}
-                      </span>
-                      <button
-                        onClick={() => switchBranch(message, message.branchIndex! + 1)}
-                        disabled={isLoading || message.branchIndex === message.branches.length - 1}
-                        aria-label="다음 분기"
-                        className="rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                      >
-                        ›
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() => setEditing({ index: i, text: message.content })}
-                    disabled={isLoading}
-                    className="ml-1 rounded px-1.5 py-0.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                  >
-                    수정
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <article key={i} className="space-y-4">
-              <StepTrace
-                steps={message.steps ?? []}
-                live={isLoading && i === messages.length - 1 && !message.content && !message.error && !message.clarify}
-              />
-              {message.clarify && (
-                <ClarifyPrompt
-                  request={message.clarify}
-                  onSelect={i === messages.length - 1 && !isLoading ? resumeWith : undefined}
+                )}
+              </div>
+            ) : (
+              <article key={i} className="space-y-4">
+                <StepTrace
+                  steps={message.steps ?? []}
+                  live={isLoading && i === messages.length - 1 && !message.content && !message.error && !message.clarify}
                 />
-              )}
-              {message.content && <AnswerMarkdown content={message.content} sources={message.sources} />}
-              {message.error && (
-                <ErrorNotice
-                  message={message.error}
-                  // 앞선 답변을 다시 받으면 그 뒤 대화와 어긋나므로 마지막 답변만 재시도할 수 있다
-                  onRetry={i === messages.length - 1 && !isLoading ? retry : undefined}
-                />
-              )}
-              {message.sources && message.sources.length > 0 && (
-                <div className="border-t border-line pt-3">
-                  <h3 className="mb-2 text-sm text-muted">참고한 문서</h3>
-                  <ul className="space-y-1.5 text-sm">
-                    {groupSources(message.sources).map((source) => (
-                      <li key={source.url} className="flex items-start gap-2">
-                        <span className="shrink-0 pt-px font-mono text-[11px] text-muted">
-                          {source.numbers.join(", ")}
-                        </span>
-                        <a
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline decoration-line underline-offset-4 hover:text-accent hover:decoration-accent"
-                        >
-                          {source.title}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </article>
-          ),
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      <form onSubmit={handleSubmit} className="pb-4 pt-2 sm:pb-6">
-        <div className="flex items-center gap-2 rounded-xl border border-line bg-surface p-1.5 pl-4 focus-within:border-accent">
-          <label htmlFor="question" className="sr-only">
-            질문
-          </label>
-          <input
-            id="question"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="질문을 입력하세요"
-            autoComplete="off"
-            className="min-w-0 flex-1 bg-transparent py-2 outline-none placeholder:text-muted"
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !input.trim()}
-            className="rounded-lg bg-accent px-4 py-2 font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            보내기
-          </button>
+                {message.clarify && (
+                  <ClarifyPrompt
+                    request={message.clarify}
+                    onSelect={i === messages.length - 1 && !isLoading ? resumeWith : undefined}
+                  />
+                )}
+                {message.content && <AnswerMarkdown content={message.content} sources={message.sources} />}
+                {message.error && (
+                  <ErrorNotice
+                    message={message.error}
+                    // 앞선 답변을 다시 받으면 그 뒤 대화와 어긋나므로 마지막 답변만 재시도할 수 있다
+                    onRetry={i === messages.length - 1 && !isLoading ? retry : undefined}
+                  />
+                )}
+                {message.sources && message.sources.length > 0 && (
+                  <div className="border-t border-line pt-3">
+                    <h3 className="mb-2 text-sm text-muted">참고한 문서</h3>
+                    <ul className="space-y-1.5 text-sm">
+                      {groupSources(message.sources).map((source) => (
+                        <li key={source.url} className="flex items-start gap-2">
+                          <span className="shrink-0 pt-px font-mono text-[11px] text-muted">
+                            {source.numbers.join(", ")}
+                          </span>
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline decoration-line underline-offset-4 hover:text-accent hover:decoration-accent"
+                          >
+                            {source.title}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </article>
+            ),
+          )}
+          <div ref={bottomRef} />
         </div>
-      </form>
-    </main>
+
+        <form onSubmit={handleSubmit} className="pb-4 pt-2 sm:pb-6">
+          <div className="flex items-center gap-2 rounded-xl border border-line bg-surface p-1.5 pl-4 focus-within:border-accent">
+            <label htmlFor="question" className="sr-only">
+              질문
+            </label>
+            <input
+              id="question"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="질문을 입력하세요"
+              autoComplete="off"
+              className="min-w-0 flex-1 bg-transparent py-2 outline-none placeholder:text-muted"
+            />
+            <button
+              type="submit"
+              disabled={isLoading || !input.trim()}
+              className="rounded-lg bg-accent px-4 py-2 font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              보내기
+            </button>
+          </div>
+        </form>
+      </main>
+
+      {/* 좁은 화면에서는 답변 위의 처리 과정 목록만 보여준다 */}
+      <aside className="hidden w-80 shrink-0 flex-col border-l border-line px-6 lg:flex">
+        <h2 className="border-b border-line py-4 text-[17px] font-semibold tracking-tight">처리 과정</h2>
+        <div className="py-6">
+          <GraphPanel run={graphRun} />
+          {!graphRun && <p className="mt-4 text-sm text-muted">질문하면 답변이 만들어지는 경로를 여기에 표시합니다.</p>}
+        </div>
+      </aside>
+    </div>
   );
 }

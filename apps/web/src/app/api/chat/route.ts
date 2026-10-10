@@ -30,6 +30,7 @@ const BodySchema = z
   );
 
 // 응답은 줄 단위 JSON(NDJSON) 이벤트 스트림:
+//   {"type":"start","node":"retrieve"}                  노드가 실행을 시작할 때마다 (generate 포함)
 //   {"type":"step","node":"classify","needsSearch":true,"searchQuery":"...","needsClarify":false}  노드가 끝날 때마다 (generate 제외)
 //   {"type":"step","node":"clarify","choice":"LangGraph"}   재개 후 고른 프레임워크 (null이면 전체 문서)
 //   {"type":"step","node":"retrieve","count":5}
@@ -50,13 +51,13 @@ export async function POST(req: Request) {
     async start(controller) {
       const send = (event: object) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
       try {
-        // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분
+        // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분, tasks: 노드 시작·종료
         const { threadId, message, resume, checkpointId } = parsed.data;
         const events = await graph.stream(
           message !== undefined ? { messages: [new HumanMessage(message)] } : new Command({ resume }),
           {
             configurable: { thread_id: threadId, checkpoint_id: checkpointId },
-            streamMode: ["messages", "updates"],
+            streamMode: ["messages", "updates", "tasks"],
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
           },
         );
@@ -67,6 +68,9 @@ export async function POST(req: Request) {
             const [message, metadata] = chunk;
             // classify·grade·rewrite의 LLM 출력도 흘러오므로 답변 노드 것만 보낸다
             if (metadata.langgraph_node === "generate" && message.text) send({ type: "token", text: message.text });
+          } else if (mode === "tasks") {
+            // 종료 이벤트(result)는 updates로 받으므로 시작 이벤트(input)만 보낸다
+            if ("input" in chunk) send({ type: "start", node: chunk.name });
           } else {
             // clarify 노드가 interrupt로 멈추면 updates에 __interrupt__로 그 값이 온다
             if ("__interrupt__" in chunk) {
