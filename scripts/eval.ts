@@ -1,38 +1,21 @@
 // 검색 품질 평가: eval/questions.json의 질문마다 챗봇과 같은 검색 쿼리를 돌려 정답 섹션이 몇 번째 청크에 나오는지 잰다
-// - 정답은 "페이지#섹션 경로" 단위. 섹션 경로는 청크 첫 줄(`제목 > 섹션 > 하위 섹션`, scripts/chunk.ts)에서 제목을 뺀 것이고,
-//   하위 섹션 청크도 정답으로 친다 ("Timeouts"는 "Timeouts > NodeTimeoutError"도 포함)
+// - 정답은 "페이지#섹션 경로" 단위 (판정 방식은 eval-refs.ts)
 // - Hit@k: 상위 k개 청크 중 정답 청크가 하나라도 있는 질문 비율 (챗봇은 k=5로 검색)
 // - MRR: 첫 정답 청크 순위의 역수 평균 (상위 MAX_RANK개 안에 없으면 0)
 // 질문 임베딩은 data/eval-embeddings.json에 캐시해 질문이 바뀌지 않으면 임베딩 API를 다시 부르지 않는다 (무료 티어 일일 한도 절약)
 import { readFile, writeFile } from "node:fs/promises";
-import type { Chunk } from "./chunk";
 import { embedQuery } from "../apps/web/src/lib/embedding";
 import { searchByEmbedding } from "../apps/web/src/lib/db/pgvector";
+import { chunkRef, exitIfUnknownGold, matches } from "./eval-refs";
 
 type Question = { id: string; lang: "ko" | "en"; type: "concept" | "keyword" | "error"; question: string; relevant: string[] };
 
-const BASE_URL = "https://docs.langchain.com/oss/javascript/";
 const MAX_RANK = 20;
 const HIT_KS = [1, 3, 5, 10];
 
 const questions: Question[] = JSON.parse(await readFile(new URL("eval/questions.json", import.meta.url), "utf8"));
 
-// 청크 → "페이지#섹션 경로" (페이지 도입부는 섹션 경로가 빈 문자열)
-function chunkRef(chunk: { source_url: string; title: string; content: string }) {
-  const path = chunk.content.split("\n", 1)[0];
-  const section = path === chunk.title ? "" : path.slice(chunk.title.length + " > ".length);
-  return `${chunk.source_url.replace(BASE_URL, "")}#${section}`;
-}
-const matches = (ref: string, gold: string) => ref === gold || ref.startsWith(`${gold} > `);
-
-// 정답 섹션 오타·문서 개편으로 아무 청크와도 안 맞는 정답이 있으면 점수가 조용히 깎이므로 먼저 확인
-const chunks: Chunk[] = JSON.parse(await readFile(new URL("../data/chunks.json", import.meta.url), "utf8"));
-const refs = chunks.map(chunkRef);
-const unknown = questions.flatMap((q) => q.relevant.filter((gold) => !refs.some((ref) => matches(ref, gold))));
-if (unknown.length > 0) {
-  console.error(`relevant sections not found in data/chunks.json:\n  ${unknown.join("\n  ")}`);
-  process.exit(1);
-}
+await exitIfUnknownGold(questions.flatMap((q) => q.relevant));
 
 const cacheUrl = new URL("../data/eval-embeddings.json", import.meta.url);
 const cache: Record<string, number[]> = JSON.parse(await readFile(cacheUrl, "utf8").catch(() => "{}"));

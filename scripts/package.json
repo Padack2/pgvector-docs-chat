@@ -8,6 +8,7 @@
     "embed": "tsx --no-warnings --env-file=../apps/web/.env.local embed.ts",
     "eval": "tsx --no-warnings --env-file=../apps/web/.env.local eval.ts",
     "eval-clarify": "tsx --no-warnings --env-file=../apps/web/.env.local eval-clarify.ts",
+    "eval-compound": "tsx --no-warnings --env-file=../apps/web/.env.local eval-compound.ts",
     "setup-checkpointer": "tsx --no-warnings --env-file=../apps/web/.env.local setup-checkpointer.ts",
     "cleanup-threads": "tsx --no-warnings --env-file=../apps/web/.env.local cleanup-threads.ts"
   },

@@ -1,0 +1,42 @@
+[
+  { "id": "m01", "lang": "ko", "question": "checkpointer와 store는 뭐가 다르고 각각 언제 써?", "subtopics": [
+    { "topic": "checkpointer", "relevant": ["langgraph/persistence#Checkpointer vs. store", "langgraph/checkpointers#Why use checkpointers", "langgraph/checkpointers#Core concepts", "langgraph/checkpointers#", "langgraph/persistence#"] },
+    { "topic": "store", "relevant": ["langgraph/persistence#Checkpointer vs. store", "langgraph/stores#Basic usage", "langgraph/stores#Using in LangGraph", "langgraph/stores#", "langgraph/persistence#"] }
+  ] },
+  { "id": "m02", "lang": "ko", "question": "createAgent에서 툴 실행 전에 사람 승인을 받게 하고, 최종 응답은 정해진 JSON 스키마로 받으려면?", "subtopics": [
+    { "topic": "human-in-the-loop", "relevant": ["langchain/human-in-the-loop#Configuring interrupts", "langchain/human-in-the-loop#Interrupt decision types"] },
+    { "topic": "structured output", "relevant": ["langchain/structured-output#Response format", "langchain/structured-output#Provider strategy", "langchain/structured-output#Tool calling strategy", "langchain/agents#Core components > Structured output"] }
+  ] },
+  { "id": "m03", "lang": "ko", "question": "Deep Agents에서 서브에이전트는 어떻게 정의하고, 에이전트가 쓰는 파일은 어디에 저장되는지 바꿀 수 있어?", "subtopics": [
+    { "topic": "subagents", "relevant": ["deepagents/subagents#Configuration", "deepagents/subagents#Custom subagents", "deepagents/subagents#Using SubAgent", "deepagents/customization#Subagents"] },
+    { "topic": "backends", "relevant": ["deepagents/backends#Built-in backends", "deepagents/backends#Specify a backend", "deepagents/backends#Quickstart", "deepagents/customization#Backends"] }
+  ] },
+  { "id": "m04", "lang": "ko", "question": "LangGraph에서 작업을 여러 개로 나눠 병렬 실행하는 Send랑, 상태 업데이트와 다음 노드 이동을 한 번에 하는 Command는 각각 어떻게 써?", "subtopics": [
+    { "topic": "Send", "relevant": ["langgraph/graph-api#`Send`", "langgraph/use-graph-api#Map-Reduce and the send API"] },
+    { "topic": "Command", "relevant": ["langgraph/graph-api#`Command`", "langgraph/use-graph-api#Combine control flow and state updates with `Command`"] }
+  ] },
+  { "id": "m05", "lang": "ko", "question": "에이전트 대화가 길어지면 이전 메시지를 요약해서 줄이고, 사용자 선호 같은 정보는 다른 대화에서도 기억하게 하고 싶어", "subtopics": [
+    { "topic": "summarize messages", "relevant": ["langchain/short-term-memory#Common patterns > Summarize messages", "langgraph/add-memory#Manage short-term memory > Summarize messages", "langchain/middleware/built-in#Provider-agnostic middleware > Summarization", "langchain/context-engineering#Life-cycle context > Example: Summarization", "deepagents/context-engineering#Context compression > Summarization"] },
+    { "topic": "long-term memory", "relevant": ["langchain/long-term-memory#Usage", "langchain/long-term-memory#Memory storage", "langgraph/add-memory#Add long-term memory"] }
+  ] },
+  { "id": "m06", "lang": "ko", "question": "MCP 서버의 툴을 에이전트에 붙이는 방법이랑, OAuth가 필요한 MCP 서버에 인증하는 방법 알려줘", "subtopics": [
+    { "topic": "MCP tools", "relevant": ["langchain/mcp/tools#Use MCP tools in an agent", "langchain/mcp/index#Quickstart", "deepagents/tools#MCP tools", "deepagents/customization#Tools > MCP tools"] },
+    { "topic": "MCP OAuth", "relevant": ["langchain/mcp/auth#OAuth authentication"] }
+  ] },
+  { "id": "m07", "lang": "ko", "question": "Deep Agents에서 모델이 레이트 리밋에 걸리면 다른 모델로 넘기고, 파일 삭제 같은 위험한 툴은 실행 전에 승인받게 하려면?", "subtopics": [
+    { "topic": "fallbacks", "relevant": ["deepagents/fault-tolerance#Fallbacks", "deepagents/fault-tolerance#Rate limiting"] },
+    { "topic": "human-in-the-loop", "relevant": ["deepagents/human-in-the-loop#Basic configuration", "deepagents/human-in-the-loop#Decision types", "deepagents/human-in-the-loop#", "deepagents/customization#Human-in-the-loop", "deepagents/overview#Steering > Human-in-the-loop"] }
+  ] },
+  { "id": "m08", "lang": "en", "question": "How do I stream LLM tokens from a LangGraph graph, and how do I unit test a single node?", "subtopics": [
+    { "topic": "stream tokens", "relevant": ["langgraph/streaming#Stream modes > LLM tokens"] },
+    { "topic": "test nodes", "relevant": ["langgraph/test#Testing individual nodes and edges", "langgraph/test#Getting started"] }
+  ] },
+  { "id": "m09", "lang": "ko", "question": "LangSmith 트레이싱은 어떻게 켜고, 에이전트가 툴을 올바른 순서로 호출했는지는 어떻게 평가해?", "subtopics": [
+    { "topic": "tracing", "relevant": ["langchain/observability#Enable tracing", "langchain/observability#Quickstart", "langgraph/observability#Enable tracing", "langchain/multi-agent/router-knowledge-base#Setup > LangSmith", "langchain/multi-agent/subagents-personal-assistant#Setup > LangSmith", "langchain/multi-agent/handoffs-customer-support#Setup > LangSmith", "langchain/multi-agent/skills-sql-assistant#Setup > LangSmith"] },
+    { "topic": "trajectory evals", "relevant": ["langchain/test/evals#Trajectory match evaluator"] }
+  ] },
+  { "id": "m10", "lang": "en", "question": "When should I pick the Functional API over the Graph API, and how can I render my graph as a diagram?", "subtopics": [
+    { "topic": "graph vs functional", "relevant": ["langgraph/choosing-apis#Quick decision guide", "langgraph/choosing-apis#Detailed comparison", "langgraph/functional-api#Functional API vs. Graph API", "langgraph/choosing-apis#Summary"] },
+    { "topic": "visualization", "relevant": ["langgraph/use-graph-api#Visualize your graph", "langgraph/graph-api#Visualization"] }
+  ] }
+]
