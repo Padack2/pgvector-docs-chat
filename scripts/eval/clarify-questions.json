@@ -9,6 +9,17 @@
   { "id": "a08", "shouldAsk": true, "messages": ["How do I stream tokens to my React frontend?"] },
   { "id": "a09", "shouldAsk": true, "messages": ["에이전트가 도구를 실행하기 전에 사람 승인을 받는 방법"] },
   { "id": "a10", "shouldAsk": true, "messages": ["장기 메모리는 어디에 어떻게 저장해?"] },
+  { "id": "a11", "shouldAsk": true, "messages": ["에러 나면 재시도하게 하려면?"] },
+  { "id": "a12", "shouldAsk": true, "messages": ["모델은 어떻게 설정해?"] },
+  { "id": "a13", "shouldAsk": true, "messages": ["도구는 어떻게 추가해?"] },
+  { "id": "a14", "shouldAsk": true, "messages": ["컨텍스트 엔지니어링은 어떻게 해?"] },
+  { "id": "a15", "shouldAsk": true, "messages": ["스킬은 어떻게 써?"] },
+  { "id": "a16", "shouldAsk": true, "messages": ["실행 중간 진행 상황을 실시간으로 보여주려면?"] },
+  { "id": "a17", "shouldAsk": true, "messages": ["How do I pause the agent and wait for user input?"] },
+  { "id": "a18", "shouldAsk": true, "messages": ["대화가 길어지면 이전 메시지를 요약하려면?"] },
+  { "id": "a19", "shouldAsk": true, "messages": ["How do I persist conversation state between sessions?"] },
+  { "id": "a20", "shouldAsk": true, "messages": ["How do I run multiple agents together?"] },
+  { "id": "a21", "shouldAsk": true, "messages": ["응답 형식을 정해진 스키마로 강제하려면?"] },
 
   { "id": "c01", "shouldAsk": false, "messages": ["createAgent에 메모리 추가하는 법"] },
   { "id": "c02", "shouldAsk": false, "messages": ["StateGraph에서 노드 실패 시 재시도 설정"] },
@@ -20,6 +31,18 @@
   { "id": "c08", "shouldAsk": false, "messages": ["Deep Agents에서 human-in-the-loop 설정하는 법"] },
   { "id": "c09", "shouldAsk": false, "messages": ["initChatModel로 모델 제공자 바꾸기"] },
   { "id": "c10", "shouldAsk": false, "messages": ["임베딩 차원은 얼마로 하는 게 좋아?"] },
+  { "id": "c11", "shouldAsk": false, "messages": ["createAgent에서 대화 요약 미들웨어 쓰는 법"] },
+  { "id": "c12", "shouldAsk": false, "messages": ["StateGraph에 체크포인터 붙이는 방법"] },
+  { "id": "c13", "shouldAsk": false, "messages": ["createDeepAgent의 백엔드를 파일 시스템으로 바꾸려면?"] },
+  { "id": "c14", "shouldAsk": false, "messages": ["LangGraph에서 타임 트래블로 이전 상태로 되돌리기"] },
+  { "id": "c15", "shouldAsk": false, "messages": ["How do I add a retry policy to a node in StateGraph?"] },
+  { "id": "c16", "shouldAsk": false, "messages": ["Deep Agents의 todo 리스트는 어떻게 동작해?"] },
+  { "id": "c17", "shouldAsk": false, "messages": ["LangChain 미들웨어로 모델 호출 전에 메시지 수정하기"] },
+  { "id": "c18", "shouldAsk": false, "messages": ["createAgent에 시스템 프롬프트 넣는 법"] },
+  { "id": "c19", "shouldAsk": false, "messages": ["Pregel이 뭐야?"] },
+  { "id": "c20", "shouldAsk": false, "messages": ["Deep Agents와 createAgent 중 뭘 써야 해?"] },
+  { "id": "c21", "shouldAsk": false, "messages": ["useStream 훅으로 React에서 스트리밍 받는 법"] },
+  { "id": "c22", "shouldAsk": false, "messages": ["Send API로 노드를 병렬 실행하려면?"] },
 
   {
     "id": "x01",
@@ -46,6 +69,33 @@
       "Deep Agents로 리서치 에이전트를 만드는 중이야",
       "Deep Agents로 리서치 에이전트를 만드시는군요. 궁금한 점을 말씀해 주세요.",
       "서브에이전트는 어떻게 만들어?"
+    ]
+  },
+  {
+    "id": "x04",
+    "shouldAsk": false,
+    "messages": [
+      "createAgent로 SQL 질의 에이전트를 만들고 있어",
+      "createAgent로 SQL 에이전트를 만드시는군요. 어떤 부분이 궁금하세요?",
+      "쿼리 실행 전에 사람 승인은 어떻게 넣어?"
+    ]
+  },
+  {
+    "id": "x05",
+    "shouldAsk": false,
+    "messages": [
+      "LangGraph로 여러 단계짜리 데이터 처리 워크플로우를 짜는 중이야",
+      "LangGraph로 워크플로우를 구성하시는군요. 무엇을 도와드릴까요?",
+      "중간에 에러 나면 재시도는 어떻게 해?"
+    ]
+  },
+  {
+    "id": "x06",
+    "shouldAsk": true,
+    "messages": [
+      "임베딩 모델은 뭘 쓰는 게 좋아?",
+      "용도와 언어에 따라 다르지만, 다국어 문서라면 다국어 지원 임베딩 모델을 권장합니다.",
+      "스트리밍은 어떻게 해?"
     ]
   }
 ]

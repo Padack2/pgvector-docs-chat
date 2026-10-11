@@ -16,12 +16,25 @@ console.log(`model: ${model} (실패하면 llm.ts의 다음 모델로 넘어감)
 // Gemini 무료 티어는 모델당 분당 5요청이라 호출 사이를 띄운다
 const DELAY_MS = process.env.LLM_PROVIDER === "ollama" ? 0 : 13_000;
 
+// 모든 모델이 실패하면(503·시간 초과가 겹칠 때) 1분 쉬고 다시 시도한다. llm.ts가 실패한 모델을 1분간 건너뛰기 때문
+async function classifyWithRetry(state: GraphStateType, attempts = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      return await classify(state);
+    } catch (error) {
+      if (i >= attempts) throw error;
+      console.warn(`classify failed (${i}/${attempts}), retrying in 60s`);
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+  }
+}
+
 const results = [];
 for (const [i, c] of cases.entries()) {
   if (i > 0) await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
   // scripts 패키지는 @langchain/core에 의존하지 않으므로 메시지를 {role, content}로 넘긴다 (LangChain이 변환)
   const messages = c.messages.map((content, i) => ({ role: i % 2 === 0 ? "user" : "assistant", content }));
-  const { frameworkCandidates = [] } = await classify({ messages } as unknown as GraphStateType);
+  const { frameworkCandidates = [] } = await classifyWithRetry({ messages } as unknown as GraphStateType);
   const asked = frameworkCandidates.length >= 2;
   results.push({ ...c, asked, frameworkCandidates });
   console.log(
