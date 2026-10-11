@@ -36,6 +36,7 @@ frameworkCandidates: 문서는 langchain(createAgent·미들웨어), langgraph(S
 메모리·스트리밍·human-in-the-loop·서브에이전트처럼 같은 주제가 여러 프레임워크에 따로 있습니다.
 - 답이 프레임워크마다 다르고, 질문과 앞선 대화 어디에도 프레임워크를 알 단서(이름, createAgent·StateGraph 같은 API)가 없을 때만 후보를 모두 나열하세요. 예: "메모리는 어떻게 써?"
 - 프레임워크를 밝혔거나 API 이름으로 알 수 있거나, 비교 질문이거나, 특정 프레임워크와 무관하면 빈 배열입니다. 예: "createAgent에 메모리 추가", "LangChain과 LangGraph 차이"
+- 후보를 1개만 내지 마세요. 단서로 프레임워크가 하나로 정해지면 빈 배열, 정해지지 않으면 해당될 수 있는 프레임워크를 2개 이상 나열합니다. 주제가 어느 한 프레임워크에서 더 익숙하다는 것은 단서가 아닙니다.
 - 확실하지 않으면 빈 배열로 하세요. 사용자에게 되묻는 것은 꼭 필요할 때만 합니다.`;
 
 export async function classify(state: GraphStateType): Promise<GraphStateUpdate> {
