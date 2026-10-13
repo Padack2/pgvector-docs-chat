@@ -1,13 +1,13 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { invokeStructured } from "../../llm";
-import type { GraphStateType, GraphStateUpdate } from "../state";
+import type { ResearchStateType, ResearchStateUpdate } from "../state";
 
 const RewriteSchema = z.object({
   searchQuery: z.string().describe("이전 쿼리와 다른 표현·키워드로 다시 쓴 검색 쿼리"),
 });
 
-export async function rewrite(state: GraphStateType): Promise<GraphStateUpdate> {
+export async function rewrite(state: ResearchStateType): Promise<ResearchStateUpdate> {
   // 엉뚱한 문서가 나왔다는 단서가 되도록 이전 결과의 제목을 함께 준다
   const titles = Array.from(new Set(state.documents.map((doc) => doc.title))).join(", ");
   const prompt = `당신은 LangChain JS/TS 공식 문서 검색 쿼리 작성자입니다.

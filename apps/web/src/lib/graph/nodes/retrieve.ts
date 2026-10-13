@@ -1,7 +1,7 @@
 import { searchChunks, type RetrievedChunk } from "../../db/pgvector";
-import type { GraphStateType, GraphStateUpdate } from "../state";
+import type { ResearchStateType, ResearchStateUpdate } from "../state";
 
-export async function retrieve(state: GraphStateType): Promise<GraphStateUpdate> {
+export async function retrieve(state: ResearchStateType): Promise<ResearchStateUpdate> {
   return { documents: await searchChunks(state.searchQuery, 5, state.framework) };
 }
 

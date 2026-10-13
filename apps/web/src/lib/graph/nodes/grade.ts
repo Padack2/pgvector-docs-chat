@@ -1,7 +1,7 @@
 import { SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { invokeStructured } from "../../llm";
-import type { GraphStateType, GraphStateUpdate } from "../state";
+import type { ResearchStateType, ResearchStateUpdate } from "../state";
 import { formatDocuments } from "./retrieve";
 
 const GradeSchema = z.object({
@@ -9,7 +9,7 @@ const GradeSchema = z.object({
 });
 
 // 청크마다 따로 평가하지 않고 결과 전체를 한 번에 판단한다 (LLM 호출 1회)
-export async function grade(state: GraphStateType): Promise<GraphStateUpdate> {
+export async function grade(state: ResearchStateType): Promise<ResearchStateUpdate> {
   const prompt = `당신은 검색 결과 평가자입니다.
 아래 검색 결과에 대화의 마지막 질문에 답하는 데 필요한 정보가 들어 있는지 판단하세요.
 일부 관련 있는 정도가 아니라, 실제로 답을 쓸 수 있을 때만 true입니다.

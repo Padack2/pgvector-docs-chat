@@ -52,25 +52,28 @@ export async function POST(req: Request) {
       const send = (event: object) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
       try {
         // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분, tasks: 노드 시작·종료
+        // subgraphs: research 서브그래프 안의 retrieve·grade·rewrite 이벤트도 받는다 (이벤트 앞에 namespace가 붙음)
         const { threadId, message, resume, checkpointId } = parsed.data;
         const events = await graph.stream(
           message !== undefined ? { messages: [new HumanMessage(message)] } : new Command({ resume }),
           {
             configurable: { thread_id: threadId, checkpoint_id: checkpointId },
             streamMode: ["messages", "updates", "tasks"],
+            subgraphs: true,
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
           },
         );
         let documents: RetrievedChunk[] = [];
         let interrupted = false;
-        for await (const [mode, chunk] of events) {
+        for await (const [, mode, chunk] of events) {
           if (mode === "messages") {
             const [message, metadata] = chunk;
             // classify·grade·rewrite의 LLM 출력도 흘러오므로 답변 노드 것만 보낸다
             if (metadata.langgraph_node === "generate" && message.text) send({ type: "token", text: message.text });
           } else if (mode === "tasks") {
-            // 종료 이벤트(result)는 updates로 받으므로 시작 이벤트(input)만 보낸다
-            if ("input" in chunk) send({ type: "start", node: chunk.name });
+            // 종료 이벤트(result)는 updates로 받으므로 시작 이벤트(input)만 보낸다.
+            // research는 안쪽 노드 이벤트로 보여주므로 서브그래프 자체의 시작은 보내지 않는다
+            if ("input" in chunk && chunk.name !== "research") send({ type: "start", node: chunk.name });
           } else {
             // clarify 노드가 interrupt로 멈추면 updates에 __interrupt__로 그 값이 온다
             if ("__interrupt__" in chunk) {
