@@ -1,11 +1,11 @@
-import { HumanMessage } from "@langchain/core/messages";
+import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { RetrievedChunk } from "@/lib/db/pgvector";
 import { graph } from "@/lib/graph";
 import { type ClarifyRequest, FRAMEWORK_LABELS } from "@/lib/graph/nodes/clarify";
-import type { Framework } from "@/lib/graph/state";
+import type { Framework, GraphStateUpdate, ResearchStateUpdate } from "@/lib/graph/state";
+import type { Source } from "@/lib/threads";
 
 // Vercel 함수 최대 실행 시간(초). 이걸 넘기면 함수가 강제 종료돼 클라이언트는 에러 이벤트도 받지 못한다
 export const maxDuration = 60;
@@ -37,7 +37,7 @@ const BodySchema = z
 //   {"type":"step","node":"grade","isSufficient":false}
 //   {"type":"step","node":"rewrite","searchQuery":"..."}
 //   {"type":"token","text":"..."}                      답변 토큰 (generate 노드 것만)
-//   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 순서가 답변의 [1], [2] 번호와 같다
+//   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 하위 질문별 검색 결과를 합친 것으로, 순서가 답변의 [1], [2] 번호와 같다
 //   {"type":"interrupt","question":"...","options":[{"value","label"}, ...]}  되물음으로 그래프가 멈춤 (sources 없이 끝남)
 //   {"type":"error","message":"..."}                   스트리밍 도중 실패 (이미 200을 보낸 뒤라 상태 코드로 알릴 수 없음)
 export async function POST(req: Request) {
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
           },
         );
-        let documents: RetrievedChunk[] = [];
+        let sources: Source[] = [];
         let interrupted = false;
         for await (const [, mode, chunk] of events) {
           if (mode === "messages") {
@@ -82,8 +82,10 @@ export async function POST(req: Request) {
               send({ type: "interrupt", ...pending.value });
               continue;
             }
-            for (const [node, update] of Object.entries(chunk)) {
-              if (!update) continue;
+            // 부모 그래프 노드와 research 서브그래프 안쪽 노드(retrieve·grade·rewrite)의 변경분이 섞여 온다
+            for (const [node, value] of Object.entries(chunk)) {
+              if (!value) continue;
+              const update = value as GraphStateUpdate & ResearchStateUpdate;
               if (node === "classify") {
                 send({
                   type: "step",
@@ -96,19 +98,21 @@ export async function POST(req: Request) {
                 const framework = update.framework as Framework | null | undefined;
                 send({ type: "step", node, choice: framework ? FRAMEWORK_LABELS[framework] : null });
               } else if (node === "retrieve") {
-                // 재검색하면 documents가 교체되므로 마지막 값이 답변 근거
-                documents = update.documents ?? [];
-                send({ type: "step", node, count: documents.length });
+                send({ type: "step", node, count: update.documents?.length ?? 0 });
               } else if (node === "grade") {
                 send({ type: "step", node, isSufficient: update.isSufficient });
               } else if (node === "rewrite") {
                 send({ type: "step", node, searchQuery: update.searchQuery });
+              } else if (node === "generate") {
+                // generate가 합친 답변 근거를 답변 메시지에 저장한다 (generate.ts)
+                const [answer] = update.messages as BaseMessage[];
+                sources = (answer.additional_kwargs.sources ?? []) as Source[];
               }
             }
           }
         }
         if (!interrupted) {
-          send({ type: "sources", sources: documents.map((doc) => ({ title: doc.title, url: doc.source_url })) });
+          send({ type: "sources", sources });
         }
       } catch (error) {
         console.error(error);

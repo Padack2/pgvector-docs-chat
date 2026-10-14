@@ -1,4 +1,5 @@
 import { SystemMessage } from "@langchain/core/messages";
+import { Overwrite } from "@langchain/langgraph";
 import { z } from "zod";
 import { invokeStructured } from "../../llm";
 import { FRAMEWORKS, type GraphStateType, type GraphStateUpdate } from "../state";
@@ -52,7 +53,7 @@ export async function classify(state: GraphStateType): Promise<GraphStateUpdate>
     subQueries: isChitchat ? [] : subQueries.length > 0 ? subQueries.slice(0, 3) : [searchQuery],
     frameworkCandidates: isChitchat ? [] : Array.from(new Set(frameworkCandidates)),
     framework: null,
-    documents: [],
-    retryCount: 0,
+    // researched는 누적 reducer라 빈 배열을 보내면 그대로 남으므로 덮어써서 비운다
+    researched: new Overwrite([]),
   };
 }

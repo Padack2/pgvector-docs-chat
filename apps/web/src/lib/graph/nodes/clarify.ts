@@ -22,5 +22,8 @@ export function clarify(state: GraphStateType): GraphStateUpdate {
   });
   // "all"이나 알 수 없는 값이면 전체 문서에서 찾는다
   const framework = FRAMEWORKS.find((f) => f === choice) ?? null;
-  return { framework };
+  // classify는 되물을 질문을 대개 프레임워크별 하위 질문("LangChain에서 …", "LangGraph에서 …")으로 나눈다.
+  // 하나를 고르면 나머지는 고른 문서에서 헛검색되므로 독립 질문 하나로 검색하고, "all"이면 프레임워크별 검색을 그대로 둔다.
+  // classify 프롬프트로 나누지 말라고 해도 대부분 나눠서(eval-clarify 2회, 되물은 질문 중 16/18·15/19) 코드에서 처리한다 (ADR-007)
+  return framework ? { framework, subQueries: [state.searchQuery] } : { framework };
 }

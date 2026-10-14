@@ -3,16 +3,18 @@
 // - 지표: 모든 하위 주제가 컨텍스트에 들어간 질문 비율 (all covered), 하위 주제 단위 비율 (subtopic recall)
 // - 정답 섹션 기준: 그 섹션만 읽어도 하위 주제에 답할 수 있고, 질문이 지정한 프레임워크 범위 안일 것
 //   (예: createAgent 질문에 Deep Agents 섹션은 정답 아님, 링크만 있는 섹션·"방법"을 묻는데 개요뿐인 페이지 도입부도 아님)
-// - grade → rewrite 재검색은 빼고 검색 단계만 비교한다
+// - grade → rewrite 재검색은 빼고 검색 단계만 비교한다 (--graph를 주면 재검색을 포함한 방식도 함께 잰다)
 // - classify가 프레임워크를 되물어도 고르지 않고 전체 문서에서 찾는다 ("구분 없이 찾기"와 같음)
 // - classify 한 번의 출력으로 두 방식을 함께 잰다 (같은 호출이라 모델 차이가 비교에 섞이지 않음, ADR-007)
 //   - 기준선: searchQuery 1개로 상위 k청크
 //   - 분해: subQueries마다 검색해 순위별로 번갈아 합침 (같은 청크는 하나만), 상위 k청크
-// LLM을 질문마다 1번 호출한다. 모델은 apps/web/.env.local 설정을 따르고, 실행할 때 환경 변수로 바꿀 수 있다
+// - --graph: 챗봇처럼 하위 질문마다 research 서브그래프(retrieve → grade → rewrite)를 병렬 실행해 mergeResearched로 합친다
+// LLM을 질문마다 1번 호출한다 (--graph면 하위 질문마다 grade·rewrite가 더 붙어 질문당 3~10번). 모델은 apps/web/.env.local 설정을 따르고, 실행할 때 환경 변수로 바꿀 수 있다
 import { readFile } from "node:fs/promises";
 import { searchChunks, type RetrievedChunk } from "../apps/web/src/lib/db/pgvector";
 import { classify } from "../apps/web/src/lib/graph/nodes/classify";
-import type { GraphStateType } from "../apps/web/src/lib/graph/state";
+import { mergeResearched, research } from "../apps/web/src/lib/graph/research";
+import type { GraphStateType, ResearchResult } from "../apps/web/src/lib/graph/state";
 import { chunkRef, exitIfUnknownGold, matches } from "./eval-refs";
 
 type Question = {
@@ -27,6 +29,7 @@ const questions: Question[] = JSON.parse(
 );
 await exitIfUnknownGold(questions.flatMap((q) => q.subtopics.flatMap((s) => s.relevant)));
 
+const GRAPH = process.argv.includes("--graph");
 const model =
   process.env.LLM_PROVIDER === "ollama" ? `ollama:${process.env.OLLAMA_MODEL}` : `gemini:${process.env.GEMINI_MODEL}`;
 console.log(`model: ${model} (실패하면 llm.ts의 다음 모델로 넘어감)\n`);
@@ -56,19 +59,19 @@ function dedupeSection(chunks: RetrievedChunk[]) {
 }
 
 // 모든 모델이 실패하면(503·시간 초과가 겹칠 때) 1분 쉬고 다시 시도한다. llm.ts가 실패한 모델을 1분간 건너뛰기 때문
-async function classifyWithRetry(question: string, attempts = 3) {
+async function withRetry<T>(name: string, run: () => Promise<T>, attempts = 3) {
   for (let i = 1; ; i++) {
     try {
-      return await classify({ messages: [{ role: "user", content: question }] } as unknown as GraphStateType);
+      return await run();
     } catch (error) {
       if (i >= attempts) throw error;
-      console.warn(`classify failed (${i}/${attempts}), retrying in 60s`);
+      console.warn(`${name} failed (${i}/${attempts}), retrying in 60s`);
       await new Promise((resolve) => setTimeout(resolve, 60_000));
     }
   }
 }
 
-type Retrieved = { single: RetrievedChunk[]; merged: RetrievedChunk[] };
+type Retrieved = { single: RetrievedChunk[]; merged: RetrievedChunk[]; researched: RetrievedChunk[] };
 const METHODS: Record<string, (r: Retrieved) => RetrievedChunk[]> = {
   "기준선 5청크": (r) => r.single.slice(0, 5),
   "기준선 8청크": (r) => r.single.slice(0, 8),
@@ -76,15 +79,30 @@ const METHODS: Record<string, (r: Retrieved) => RetrievedChunk[]> = {
   "분해 8청크": (r) => r.merged.slice(0, 8),
   "분해 8청크 + 섹션 중복 제거": (r) => dedupeSection(r.merged).slice(0, 8),
   "분해 10청크": (r) => r.merged.slice(0, 10),
+  ...(GRAPH && { "그래프 경유 (grade·rewrite 포함)": (r: Retrieved) => r.researched }),
 };
 const score = Object.fromEntries(Object.keys(METHODS).map((name) => [name, { all: 0, sub: 0 }]));
 
 for (const [i, q] of questions.entries()) {
   if (i > 0) await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
-  const { searchQuery = "", subQueries = [] } = await classifyWithRetry(q.question);
+  const { searchQuery = "", subQueries = [] } = await withRetry("classify", () =>
+    classify({ messages: [{ role: "user", content: q.question }] } as unknown as GraphStateType),
+  );
   const retrieved: Retrieved = {
     single: await searchChunks(searchQuery, PER_QUERY),
     merged: interleave(await Promise.all(subQueries.map((sub) => searchChunks(sub, PER_QUERY)))),
+    // 되물어도 고르지 않으므로 framework는 전체(null). 챗봇의 Send처럼 하위 질문을 병렬 실행한다
+    researched: GRAPH
+      ? await withRetry("research", async () =>
+          mergeResearched(
+            (await Promise.all(subQueries.map((question) => research({ question, framework: null })))).flatMap(
+              // research는 항상 배열을 반환한다 (Overwrite는 classify만 씀)
+              (update) => update.researched as ResearchResult[],
+            ),
+            subQueries,
+          ),
+        )
+      : [],
   };
 
   const marks: string[] = [];
@@ -93,7 +111,7 @@ for (const [i, q] of questions.entries()) {
     const covered = q.subtopics.map((s) => refs.some((ref) => s.relevant.some((gold) => matches(ref, gold))));
     score[name].sub += covered.filter(Boolean).length;
     if (covered.every(Boolean)) score[name].all++;
-    if (name === "기준선 5청크" || name === "분해 8청크") {
+    if (name === "기준선 5청크" || name === "분해 8청크" || name.startsWith("그래프 경유")) {
       marks.push(`${name}: ${q.subtopics.map((s, j) => `${covered[j] ? "+" : "-"}${s.topic}`).join(" ")}`);
     }
   }

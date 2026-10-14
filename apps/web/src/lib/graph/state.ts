@@ -5,15 +5,18 @@ import type { RetrievedChunk } from "../db/pgvector";
 export const FRAMEWORKS = ["langchain", "langgraph", "deepagents"] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
 
+// 하위 질문 하나의 검색 결과. 하위 질문마다 병렬로 실행된 research 서브그래프가 하나씩 만든다
+export type ResearchResult = { question: string; documents: RetrievedChunk[] };
+
 // 노드는 바꿀 필드만 반환하고, 별도 reducer가 없으면 마지막 값으로 덮어쓴다
 
-// 검색 서브그래프(retrieve → grade → rewrite 반복)의 상태
+// 검색 서브그래프(retrieve → grade → rewrite 반복)의 상태. 하위 질문 하나를 맡는다
 export const ResearchState = Annotation.Root({
-  // 대화 기록: 마지막 HumanMessage가 이번 질문, generate가 AIMessage로 답변을 덧붙인다
-  ...MessagesAnnotation.spec,
+  // 맡은 하위 질문 (독립 질문). grade·rewrite가 대화 대신 이 질문을 기준으로 판단한다
+  question: Annotation<string>,
   // 되물어서 사용자가 고른 프레임워크. 검색을 이 프레임워크 문서로 제한한다 (null이면 전체)
   framework: Annotation<Framework | null>,
-  // 실제 검색에 쓰는 쿼리: 후속 질문("그거 예시는?")을 대화 맥락으로 풀어 쓴 독립 질문, 재검색 때마다 재작성됨
+  // 실제 검색에 쓰는 쿼리: 처음엔 question, 재검색 때마다 재작성됨
   searchQuery: Annotation<string>,
   // 마지막 검색 결과 (재검색 시 교체)
   documents: Annotation<RetrievedChunk[]>,
@@ -23,15 +26,21 @@ export const ResearchState = Annotation.Root({
   retryCount: Annotation<number>,
 });
 
-// 전체 그래프 상태. 서브그래프와 같은 키를 공유해 서브그래프를 노드로 그대로 붙인다
 export const GraphState = Annotation.Root({
-  ...ResearchState.spec,
+  // 대화 기록: 마지막 HumanMessage가 이번 질문, generate가 AIMessage로 답변을 덧붙인다
+  ...MessagesAnnotation.spec,
   // 의도 분류 결과: false면 검색 없이 바로 답변
   needsSearch: Annotation<boolean>,
   // 답이 프레임워크마다 다른데 사용자가 특정하지 않았을 때의 후보. 2개 이상이면 clarify에서 되묻는다
   frameworkCandidates: Annotation<Framework[]>,
-  // 주제별로 나눈 하위 질문 (단일 주제면 1개). 복합 질문을 주제마다 따로 검색하는 데 쓴다 (ADR-007, 아직 검색에는 미사용)
+  // 되물어서 사용자가 고른 프레임워크 (null이면 전체 문서)
+  framework: Annotation<Framework | null>,
+  // 후속 질문("그거 예시는?")을 대화 맥락으로 풀어 쓴 독립 질문
+  searchQuery: Annotation<string>,
+  // 주제별로 나눈 하위 질문 (단일 주제면 1개). 하위 질문마다 research를 병렬 실행한다 (ADR-007)
   subQueries: Annotation<string[]>,
+  // 병렬 실행된 research의 결과를 모으는 reducer. 질문마다 classify가 Overwrite로 비운다
+  researched: Annotation<ResearchResult[]>({ reducer: (current, update) => current.concat(update), default: () => [] }),
 });
 
 export type ResearchStateType = typeof ResearchState.State;
