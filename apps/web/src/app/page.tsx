@@ -6,20 +6,26 @@ import { GraphPanel, type GraphRun, type NodeName } from "@/components/GraphPane
 import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
 import type { ThreadView } from "@/lib/threads";
 
-// 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고)
+// 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고).
+// research 안쪽 노드는 어느 하위 질문의 분기인지(branch) 함께 온다
 type Step =
   | { node: "classify"; needsSearch: boolean; searchQuery: string; needsClarify?: boolean }
   | { node: "clarify"; choice: string | null }
-  | { node: "retrieve"; count: number }
-  | { node: "grade"; isSufficient: boolean }
-  | { node: "rewrite"; searchQuery: string };
+  | { node: "retrieve"; count: number; branch?: number }
+  | { node: "grade"; isSufficient: boolean; branch?: number }
+  | { node: "rewrite"; searchQuery: string; branch?: number };
+
+// 시작했지만 아직 끝나지 않은 노드. 하위 질문 분기는 동시에 여러 개가 실행된다
+type ActiveNode = { node: NodeName; branch?: number };
 
 type Message = {
   role: "user" | "assistant";
   content: string;
   steps?: Step[];
+  // 하위 질문 분기마다 맡은 질문 (assistant만, 분기 번호 순)
+  subQueries?: string[];
   // 시작했지만 아직 끝나지 않은 노드 (assistant만). 실패하면 실패한 노드로 남는다
-  activeNode?: NodeName;
+  active?: ActiveNode[];
   sources?: Source[];
   error?: string;
   // 되물음으로 그래프가 멈춰 있으면 그 질문과 선택지 (assistant만)
@@ -35,7 +41,8 @@ type ChatRequest = { threadId: string; message?: string; resume?: string; checkp
 
 // /api/chat의 NDJSON 이벤트 (route.ts 주석 참고)
 type ChatEvent =
-  | { type: "start"; node: NodeName }
+  | { type: "start"; node: NodeName; branch?: number }
+  | { type: "branch"; branch: number; question: string }
   | ({ type: "step" } & Step)
   | ({ type: "interrupt" } & ClarifyRequest)
   | { type: "token"; text: string }
@@ -80,7 +87,7 @@ async function fetchThread(threadId: string, checkpointId?: string): Promise<Thr
 }
 
 // 서버에 저장된 대화를 화면 메시지로. 마지막 질문에 답이 없으면 되물음으로 멈춰 있거나 실행이 실패한 것이다
-function toMessages(view: ThreadView, run?: Pick<Message, "steps" | "error" | "activeNode">): Message[] {
+function toMessages(view: ThreadView, run?: Pick<Message, "steps" | "subQueries" | "error" | "active">): Message[] {
   const messages: Message[] = view.messages.map((m) => ({ ...m }));
   if (messages.at(-1)?.role === "user") {
     messages.push(
@@ -138,20 +145,62 @@ function describePending(last: Step | undefined) {
   return last.isSufficient ? "답변을 쓰고 있어요" : "다음 단계를 진행하고 있어요";
 }
 
-// 답변이 나오기 전에는 단계를 펼쳐 보여주고, 답변이 시작되면 접어서 요약만 남긴다
-function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
+// 하위 질문 분기 안에서 실행 중인 노드. 분기마다 따로 보여주므로 앞 단계 대신 실행 중인 노드로 판단한다
+function describeBranchPending(node: NodeName, branchSteps: Step[]) {
+  if (node === "grade") return "검색 결과를 평가하고 있어요";
+  if (node === "rewrite") return "검색어를 다시 쓰고 있어요";
+  return branchSteps.some((step) => step.node === "rewrite") ? "다시 검색하고 있어요" : "문서를 찾고 있어요";
+}
+
+function PendingLine({ text }: { text: string }) {
+  return (
+    <li className="flex items-center gap-2 text-foreground">
+      <span className="size-2 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />
+      {text}
+    </li>
+  );
+}
+
+// 답변이 나오기 전에는 단계를 펼쳐 보여주고, 답변이 시작되면 접어서 요약만 남긴다.
+// 하위 질문이 2개 이상이면 research 단계를 하위 질문별로 묶는다 (분기들이 병렬로 실행돼 이벤트가 섞여 오기 때문)
+function StepTrace({
+  steps,
+  subQueries = [],
+  active = [],
+  live,
+}: {
+  steps: Step[];
+  subQueries?: string[];
+  active?: ActiveNode[];
+  live: boolean;
+}) {
   if (!live && steps.length === 0) return null;
+  const grouped = subQueries.length >= 2;
+  const branchOf = (step: Step) => ("branch" in step ? step.branch : undefined);
+  // 분기 실행 중에는 분기마다 진행 표시를 따로 하고, 공통 진행 표시는 분기 밖 노드(답변 생성 등)가 실행될 때만 한다
+  const branchRunning = active.some((a) => a.branch !== undefined);
   const list = (
     <ol className="space-y-1.5 border-l border-line pl-3">
-      {steps.map((step, i) => (
+      {(grouped ? steps.filter((step) => branchOf(step) === undefined) : steps).map((step, i) => (
         <li key={i}>{describeStep(step)}</li>
       ))}
-      {live && (
-        <li className="flex items-center gap-2 text-foreground">
-          <span className="size-2 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />
-          {describePending(steps[steps.length - 1])}
-        </li>
-      )}
+      {grouped &&
+        subQueries.map((question, branch) => {
+          const branchSteps = steps.filter((step) => branchOf(step) === branch);
+          const running = live ? active.find((a) => a.branch === branch) : undefined;
+          return (
+            <li key={`branch-${branch}`}>
+              하위 질문 {branch + 1} · “{question}”
+              <ol className="mt-1.5 space-y-1.5 border-l border-line pl-3">
+                {branchSteps.map((step, i) => (
+                  <li key={i}>{describeStep(step)}</li>
+                ))}
+                {running && <PendingLine text={describeBranchPending(running.node, branchSteps)} />}
+              </ol>
+            </li>
+          );
+        })}
+      {live && !(grouped && branchRunning) && <PendingLine text={describePending(steps[steps.length - 1])} />}
     </ol>
   );
   if (live)
@@ -180,7 +229,12 @@ function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
             clipRule="evenodd"
           />
         </svg>
-        처리 과정 · {searches > 0 ? `검색 ${searches}회` : awaitingChoice ? "프레임워크 선택 대기" : "검색 없음"}
+        처리 과정 ·{" "}
+        {searches > 0
+          ? `${subQueries.length >= 2 ? `하위 질문 ${subQueries.length}개 · ` : ""}검색 ${searches}회`
+          : awaitingChoice
+            ? "프레임워크 선택 대기"
+            : "검색 없음"}
       </summary>
       <div className="mt-2">{list}</div>
     </details>
@@ -191,16 +245,18 @@ function StepTrace({ steps, live }: { steps: Step[]; live: boolean }) {
 function toGraphRun(message: Message | undefined, live: boolean): GraphRun | undefined {
   if (message?.role !== "assistant") return undefined;
   const steps = message.steps ?? [];
-  if (!live && steps.length === 0 && !message.activeNode && !message.clarify) return undefined;
-  const path: NodeName[] = steps.map((step) => step.node);
+  const active = message.active ?? [];
+  if (!live && steps.length === 0 && active.length === 0 && !message.clarify) return undefined;
+  const path: NodeName[] = steps.filter((step) => !("branch" in step)).map((step) => step.node);
   // sources는 답변이 끝난 뒤에 오므로 끝까지 실행된 것이다
   if (message.sources) path.push("generate");
-  const current: GraphRun["current"] = message.activeNode
-    ? { node: message.activeNode, state: live ? "running" : "failed" }
-    : message.clarify
-      ? { node: "clarify", state: "waiting" }
-      : undefined;
-  return { path, current, done: !!message.sources };
+  const branches = (message.subQueries ?? []).map((_, branch) =>
+    steps.filter((step) => "branch" in step && step.branch === branch).map((step) => step.node),
+  );
+  const current: GraphRun["current"] = message.clarify
+    ? [{ node: "clarify", state: "waiting" }]
+    : active.map((a) => ({ ...a, state: live ? "running" : "failed" }));
+  return { path, branches, current, done: !!message.sources };
 }
 
 // 질문이 여러 프레임워크에 해당될 때 그래프가 멈추고 보여주는 선택지. onSelect가 없으면(진행 중 등) 고를 수 없다
@@ -289,7 +345,7 @@ export default function Home() {
       .finally(() => setIsLoading(false));
   }, []);
 
-  function showView(view: ThreadView, failedRun?: Pick<Message, "steps" | "error" | "activeNode">) {
+  function showView(view: ThreadView, failedRun?: Pick<Message, "steps" | "subQueries" | "error" | "active">) {
     setMessages(toMessages(view, failedRun));
     setCheckpointId(view.checkpointId);
   }
@@ -374,31 +430,35 @@ export default function Home() {
     setMessages([...shown, { role: "assistant", content: "", steps: previousSteps }]);
     setIsLoading(true);
     // 다시 불러온 대화에는 처리 과정이 없으므로 이번 실행의 것을 옮겨 붙인다
-    const run: Pick<Message, "steps" | "error" | "activeNode"> = { steps: previousSteps };
+    const run: Pick<Message, "steps" | "subQueries" | "error" | "active"> = { steps: previousSteps, active: [] };
     // 답변도 에러도 없이 스트림이 끝나면(서버 강제 종료 등) 실패로 표시해 재시도할 수 있게 한다
     let finished = false;
     try {
       await streamChat(request, (event) => {
         if (event.type === "token" || event.type === "error" || event.type === "interrupt") finished = true;
         if (event.type === "start") {
-          run.activeNode = event.node;
-          updateLast((m) => ({ ...m, activeNode: event.node }));
+          run.active = [...run.active!, { node: event.node, branch: event.branch }];
+          updateLast((m) => ({ ...m, active: run.active }));
+        } else if (event.type === "branch") {
+          run.subQueries = [...(run.subQueries ?? []), event.question];
+          updateLast((m) => ({ ...m, subQueries: run.subQueries }));
         } else if (event.type === "step") {
+          const branch = "branch" in event ? event.branch : undefined;
           run.steps = [...run.steps!, event];
-          if (run.activeNode === event.node) run.activeNode = undefined;
-          updateLast((m) => ({ ...m, steps: run.steps, activeNode: run.activeNode }));
+          run.active = run.active!.filter((a) => a.node !== event.node || a.branch !== branch);
+          updateLast((m) => ({ ...m, steps: run.steps, active: run.active }));
         } else if (event.type === "interrupt") {
-          run.activeNode = undefined;
+          run.active = [];
           updateLast((m) => ({
             ...m,
-            activeNode: undefined,
+            active: [],
             clarify: { question: event.question, options: event.options },
           }));
         } else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
         else if (event.type === "sources") {
           // 답변(generate)이 끝난 뒤에 오므로 실행이 끝까지 간 것이다
-          run.activeNode = undefined;
-          updateLast((m) => ({ ...m, activeNode: undefined, sources: event.sources }));
+          run.active = [];
+          updateLast((m) => ({ ...m, active: [], sources: event.sources }));
         }
         else {
           run.error = event.message;
@@ -413,7 +473,11 @@ export default function Home() {
       const view = await fetchThread(request.threadId).catch(() => null);
       if (view && view.messages.length >= shown.length) {
         showView(view, run);
-        if (!run.error) setMessages((prev) => [...prev.slice(0, -1), { ...prev[prev.length - 1], steps: run.steps }]);
+        if (!run.error)
+          setMessages((prev) => [
+            ...prev.slice(0, -1),
+            { ...prev[prev.length - 1], steps: run.steps, subQueries: run.subQueries },
+          ]);
       }
     } catch {
       updateLast((m) => ({ ...m, error: "서버에 연결하지 못했습니다. 네트워크 연결을 확인하고 다시 시도하세요." }));
@@ -557,6 +621,8 @@ export default function Home() {
               <article key={i} className="space-y-4">
                 <StepTrace
                   steps={message.steps ?? []}
+                  subQueries={message.subQueries}
+                  active={message.active}
                   live={isLoading && i === messages.length - 1 && !message.content && !message.error && !message.clarify}
                 />
                 {message.clarify && (

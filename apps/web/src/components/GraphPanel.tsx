@@ -12,6 +12,9 @@ const NODES: Record<NodeName, { x: number; y: number; w: number; label: string }
 const NODE_H = 40;
 const START_Y = 16;
 const END_Y = 416;
+// research 서브그래프(retrieve·grade·rewrite)를 감싸는 상자. 하위 질문마다 이 상자가 병렬로 실행된다
+const RESEARCH_BOX = { x: 84, y: 174, w: 212, h: 136 };
+const RESEARCH_NODES = new Set<NodeName>(["retrieve", "grade", "rewrite"]);
 
 // from>to 키와 SVG 경로. 조건부 엣지에는 분기 조건을 적는다
 const EDGES: { from: string; to: string; d: string; label?: { text: string; x: number; y: number } }[] = [
@@ -19,7 +22,7 @@ const EDGES: { from: string; to: string; d: string; label?: { text: string; x: n
   { from: "classify", to: "clarify", d: "M150 84 V116", label: { text: "애매", x: 156, y: 104 } },
   { from: "clarify", to: "retrieve", d: "M150 156 V188" },
   { from: "classify", to: "retrieve", d: "M94 70 H70 V208 H94", label: { text: "검색", x: 74, y: 146 } },
-  { from: "classify", to: "generate", d: "M94 58 H34 V364 H94", label: { text: "검색 불필요", x: 38, y: 240 } },
+  { from: "classify", to: "generate", d: "M94 58 H34 V364 H94", label: { text: "검색 불필요", x: 38, y: 330 } },
   { from: "retrieve", to: "grade", d: "M150 228 V260" },
   { from: "grade", to: "rewrite", d: "M206 280 H254 V264", label: { text: "부족", x: 216, y: 294 } },
   { from: "rewrite", to: "retrieve", d: "M254 224 V208 H206" },
@@ -28,20 +31,40 @@ const EDGES: { from: string; to: string; d: string; label?: { text: string; x: n
 ];
 
 export type GraphRun = {
-  // 지나온 노드 순서 (끝난 노드만)
+  // research 밖의 노드(classify·clarify·generate) 중 지나온 노드 순서 (끝난 노드만)
   path: NodeName[];
-  // 실행 중이거나, 되물음으로 멈췄거나, 실패한 노드
-  current?: { node: NodeName; state: "running" | "waiting" | "failed" };
+  // 하위 질문 분기마다 research 안에서 지나온 노드 순서 (끝난 노드만)
+  branches: NodeName[][];
+  // 실행 중이거나, 되물음으로 멈췄거나, 실패한 노드. 분기가 병렬로 돌면 여러 개다
+  current: { node: NodeName; branch?: number; state: "running" | "waiting" | "failed" }[];
   done: boolean;
 };
 
+// 지나온 경로를 분기마다 하나씩 이어 붙인다: start → (classify·clarify) → 분기의 research 노드들 → generate → end.
+// 분기 이벤트가 섞여 와도 분기별로 이어야 엣지가 맞게 칠해진다
+function toSequences(run: GraphRun): string[][] {
+  const outside = (node: NodeName) => !RESEARCH_NODES.has(node);
+  const head = ["start", ...run.path.filter((node) => node !== "generate")];
+  head.push(...run.current.filter((c) => c.branch === undefined && c.node !== "generate").map((c) => c.node));
+  const tail: string[] = [];
+  if (run.path.includes("generate") || run.current.some((c) => c.node === "generate")) tail.push("generate");
+  if (run.done) tail.push("end");
+  if (run.branches.length === 0) return [[...head.filter((node) => outside(node as NodeName)), ...tail]];
+  return run.branches.map((branch, i) => [
+    ...head,
+    ...branch,
+    ...run.current.filter((c) => c.branch === i).map((c) => c.node),
+    ...tail,
+  ]);
+}
+
 export function GraphPanel({ run }: { run?: GraphRun }) {
-  const path: string[] = run ? ["start", ...run.path] : [];
-  if (run?.current) path.push(run.current.node);
-  if (run?.done) path.push("end");
-  const visitedEdges = new Set(path.slice(1).map((to, i) => `${path[i]}>${to}`));
-  const visitedNodes = new Set(path);
-  const searches = path.filter((node) => node === "retrieve").length;
+  const sequences = run ? toSequences(run) : [];
+  const visitedEdges = new Set(sequences.flatMap((seq) => seq.slice(1).map((to, i) => `${seq[i]}>${to}`)));
+  const visitedNodes = new Set(sequences.flat());
+  // 분기 하나가 재검색으로 retrieve를 몇 번 돌았는지 (가장 많이 돈 분기 기준)
+  const searches = Math.max(0, ...(run?.branches ?? []).map((branch) => branch.filter((node) => node === "retrieve").length));
+  const parallel = run?.branches.length ?? 0;
 
   return (
     <svg viewBox="0 0 300 432" className="w-full" role="img" aria-label="답변 처리 그래프">
@@ -53,6 +76,27 @@ export function GraphPanel({ run }: { run?: GraphRun }) {
           <path d="M0 0 L8 4 L0 8 z" fill="var(--accent)" />
         </marker>
       </defs>
+
+      <rect
+        x={RESEARCH_BOX.x}
+        y={RESEARCH_BOX.y}
+        width={RESEARCH_BOX.w}
+        height={RESEARCH_BOX.h}
+        rx="10"
+        fill="none"
+        stroke={parallel > 0 ? "var(--accent)" : "var(--line)"}
+        strokeDasharray="4 3"
+      />
+      <text
+        x={RESEARCH_BOX.x + RESEARCH_BOX.w - 8}
+        y={RESEARCH_BOX.y + 13}
+        textAnchor="end"
+        fontSize="9.5"
+        fontFamily="var(--font-mono)"
+        fill={parallel > 0 ? "var(--accent)" : "var(--muted)"}
+      >
+        research{parallel > 1 ? ` ×${parallel} 병렬` : ""}
+      </text>
 
       {EDGES.map((edge) => {
         const on = visitedEdges.has(`${edge.from}>${edge.to}`);
@@ -79,7 +123,9 @@ export function GraphPanel({ run }: { run?: GraphRun }) {
 
       {(Object.keys(NODES) as NodeName[]).map((name) => {
         const { x, y, w, label } = NODES[name];
-        const state = run?.current?.node === name ? run.current.state : visitedNodes.has(name) ? "visited" : "idle";
+        // 병렬 분기 중 하나라도 실행 중이면 실행 중으로 칠한다
+        const current = run?.current.find((c) => c.node === name);
+        const state = current ? current.state : visitedNodes.has(name) ? "visited" : "idle";
         const fill = {
           idle: "var(--surface)",
           visited: "var(--accent-soft)",

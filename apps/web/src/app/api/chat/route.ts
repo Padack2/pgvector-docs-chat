@@ -33,9 +33,10 @@ const BodySchema = z
 //   {"type":"start","node":"retrieve"}                  노드가 실행을 시작할 때마다 (generate 포함)
 //   {"type":"step","node":"classify","needsSearch":true,"searchQuery":"...","needsClarify":false}  노드가 끝날 때마다 (generate 제외)
 //   {"type":"step","node":"clarify","choice":"LangGraph"}   재개 후 고른 프레임워크 (null이면 전체 문서)
-//   {"type":"step","node":"retrieve","count":5}
-//   {"type":"step","node":"grade","isSufficient":false}
-//   {"type":"step","node":"rewrite","searchQuery":"..."}
+//   {"type":"branch","branch":0,"question":"..."}      하위 질문 하나의 research가 시작될 때 (병렬 실행 순서대로 0, 1, ...)
+//   {"type":"step","node":"retrieve","count":10,"branch":0}   research 안쪽 노드(retrieve·grade·rewrite)의 start·step에는 branch가 붙는다
+//   {"type":"step","node":"grade","isSufficient":false,"branch":0}
+//   {"type":"step","node":"rewrite","searchQuery":"...","branch":0}
 //   {"type":"token","text":"..."}                      답변 토큰 (generate 노드 것만)
 //   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 하위 질문별 검색 결과를 합친 것으로, 순서가 답변의 [1], [2] 번호와 같다
 //   {"type":"interrupt","question":"...","options":[{"value","label"}, ...]}  되물음으로 그래프가 멈춤 (sources 없이 끝남)
@@ -65,15 +66,24 @@ export async function POST(req: Request) {
         );
         let sources: Source[] = [];
         let interrupted = false;
-        for await (const [, mode, chunk] of events) {
+        // research 실행의 namespace("research:<task id>") → 분기 번호. 병렬 분기의 안쪽 이벤트가 섞여 오므로 이걸로 구분한다
+        const branches = new Map<string, number>();
+        for await (const [namespace, mode, chunk] of events) {
+          const branch = branches.get(namespace[0]);
           if (mode === "messages") {
             const [message, metadata] = chunk;
             // classify·grade·rewrite의 LLM 출력도 흘러오므로 답변 노드 것만 보낸다
             if (metadata.langgraph_node === "generate" && message.text) send({ type: "token", text: message.text });
           } else if (mode === "tasks") {
             // 종료 이벤트(result)는 updates로 받으므로 시작 이벤트(input)만 보낸다.
-            // research는 안쪽 노드 이벤트로 보여주므로 서브그래프 자체의 시작은 보내지 않는다
-            if ("input" in chunk && chunk.name !== "research") send({ type: "start", node: chunk.name });
+            // research는 안쪽 노드 이벤트로 보여주므로 서브그래프 자체의 시작 대신 분기 정보를 보낸다
+            if (!("input" in chunk)) continue;
+            if (chunk.name === "research") {
+              // input은 부모 상태로 타입이 잡히지만, Send로 실행된 research는 Send에 넘긴 값({ question, framework })을 받는다
+              const { question } = chunk.input as unknown as { question: string };
+              branches.set(`research:${chunk.id}`, branches.size);
+              send({ type: "branch", branch: branches.size - 1, question });
+            } else send({ type: "start", node: chunk.name, branch });
           } else {
             // clarify 노드가 interrupt로 멈추면 updates에 __interrupt__로 그 값이 온다
             if ("__interrupt__" in chunk) {
@@ -98,11 +108,11 @@ export async function POST(req: Request) {
                 const framework = update.framework as Framework | null | undefined;
                 send({ type: "step", node, choice: framework ? FRAMEWORK_LABELS[framework] : null });
               } else if (node === "retrieve") {
-                send({ type: "step", node, count: update.documents?.length ?? 0 });
+                send({ type: "step", node, count: update.documents?.length ?? 0, branch });
               } else if (node === "grade") {
-                send({ type: "step", node, isSufficient: update.isSufficient });
+                send({ type: "step", node, isSufficient: update.isSufficient, branch });
               } else if (node === "rewrite") {
-                send({ type: "step", node, searchQuery: update.searchQuery });
+                send({ type: "step", node, searchQuery: update.searchQuery, branch });
               } else if (node === "generate") {
                 // generate가 합친 답변 근거를 답변 메시지에 저장한다 (generate.ts)
                 const [answer] = update.messages as BaseMessage[];
