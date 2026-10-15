@@ -8,7 +8,10 @@
 // - classify 한 번의 출력으로 두 방식을 함께 잰다 (같은 호출이라 모델 차이가 비교에 섞이지 않음, ADR-007)
 //   - 기준선: searchQuery 1개로 상위 k청크
 //   - 분해: subQueries마다 검색해 순위별로 번갈아 합침 (같은 청크는 하나만), 상위 k청크
-// - --graph: 챗봇처럼 하위 질문마다 research 서브그래프(retrieve → grade → rewrite)를 병렬 실행해 mergeResearched로 합친다
+// - --graph: 챗봇처럼 하위 질문마다 research 서브그래프(retrieve → grade → rewrite)를 병렬 실행해 mergeResearched로 합친다.
+//   질문당 Gemini 호출 수와 재작성(rewrite) 횟수도 센다 (실패해서 다음 모델로 넘어간 호출 포함)
+// - --single: 단일 주제 질문(eval/questions.json, 검색 품질 평가셋)으로 잰다. 분해가 단일 질문을 나쁘게 만들지 않는지 확인용 (ADR-007)
+//   정답 섹션 중 하나라도 컨텍스트에 들어가면 맞은 것으로 본다 (eval.ts와 같음)
 // LLM을 질문마다 1번 호출한다 (--graph면 하위 질문마다 grade·rewrite가 더 붙어 질문당 3~10번). 모델은 apps/web/.env.local 설정을 따르고, 실행할 때 환경 변수로 바꿀 수 있다
 import { readFile } from "node:fs/promises";
 import { searchChunks, type RetrievedChunk } from "../apps/web/src/lib/db/pgvector";
@@ -24,9 +27,15 @@ type Question = {
   subtopics: { topic: string; relevant: string[] }[];
 };
 
-const questions: Question[] = JSON.parse(
-  await readFile(new URL("eval/compound-questions.json", import.meta.url), "utf8"),
-);
+const SINGLE = process.argv.includes("--single");
+const questions: Question[] = SINGLE
+  ? (
+      JSON.parse(await readFile(new URL("eval/questions.json", import.meta.url), "utf8")) as (Omit<
+        Question,
+        "subtopics"
+      > & { relevant: string[] })[]
+    ).map(({ relevant, ...q }) => ({ ...q, subtopics: [{ topic: "정답", relevant }] }))
+  : JSON.parse(await readFile(new URL("eval/compound-questions.json", import.meta.url), "utf8"));
 await exitIfUnknownGold(questions.flatMap((q) => q.subtopics.flatMap((s) => s.relevant)));
 
 const GRAPH = process.argv.includes("--graph");
@@ -37,6 +46,17 @@ console.log(`model: ${model} (실패하면 llm.ts의 다음 모델로 넘어감)
 const DELAY_MS = process.env.LLM_PROVIDER === "ollama" ? 0 : 13_000;
 // 하위 질문 하나당 가져오는 청크 수 (섹션 중복 제거 후에도 상한을 채울 수 있게 넉넉히)
 const PER_QUERY = 10;
+
+// Gemini LLM 호출을 센다. 노드별 프롬프트 첫 문장으로 재작성 호출을 구분한다 (임베딩 호출은 제외)
+const calls = { llm: 0, rewrite: 0 };
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  if (String(input instanceof Request ? input.url : input).includes(":generateContent")) {
+    calls.llm++;
+    if (String(init?.body).includes("검색 쿼리 작성자")) calls.rewrite++;
+  }
+  return originalFetch(input, init);
+};
 
 // 하위 질문별 결과를 1위끼리, 2위끼리 번갈아 합친다. 같은 청크는 먼저 나온 것만 남긴다
 function interleave(lists: RetrievedChunk[][]) {
@@ -82,9 +102,13 @@ const METHODS: Record<string, (r: Retrieved) => RetrievedChunk[]> = {
   ...(GRAPH && { "그래프 경유 (grade·rewrite 포함)": (r: Retrieved) => r.researched }),
 };
 const score = Object.fromEntries(Object.keys(METHODS).map((name) => [name, { all: 0, sub: 0 }]));
+// 하위 질문 수별 질문 수, 질문당 호출 수 합계
+const splits: Record<number, number> = {};
+const totals = { llm: 0, rewrite: 0 };
 
 for (const [i, q] of questions.entries()) {
   if (i > 0) await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+  calls.llm = calls.rewrite = 0;
   const { searchQuery = "", subQueries = [] } = await withRetry("classify", () =>
     classify({ messages: [{ role: "user", content: q.question }] } as unknown as GraphStateType),
   );
@@ -115,7 +139,10 @@ for (const [i, q] of questions.entries()) {
       marks.push(`${name}: ${q.subtopics.map((s, j) => `${covered[j] ? "+" : "-"}${s.topic}`).join(" ")}`);
     }
   }
-  console.log(`${q.id}  ${marks.join("  |  ")}`);
+  splits[subQueries.length] = (splits[subQueries.length] ?? 0) + 1;
+  totals.llm += calls.llm;
+  totals.rewrite += calls.rewrite;
+  console.log(`${q.id}  ${marks.join("  |  ")}${GRAPH ? `  (LLM ${calls.llm}회, 재작성 ${calls.rewrite}회)` : ""}`);
   console.log(`      query: ${searchQuery}`);
   for (const sub of subQueries) console.log(`      sub:   ${sub}`);
 }
@@ -126,6 +153,11 @@ for (const [name, s] of Object.entries(score)) {
   console.log(
     `${name.padEnd(28)}${`${s.all}/${questions.length}`.padStart(11)}  ${`${s.sub}/${totalSubtopics}`.padStart(15)}`,
   );
+}
+console.log(`\n하위 질문 수별 질문 수: ${Object.entries(splits).map(([n, count]) => `${n}개 ${count}`).join(", ")}`);
+if (GRAPH) {
+  const avg = (n: number) => (n / questions.length).toFixed(1);
+  console.log(`질문당 평균 LLM 호출 ${avg(totals.llm)}회 (재작성 ${avg(totals.rewrite)}회), 합계 ${totals.llm}회`);
 }
 
 // pgvector.ts의 커넥션 풀이 열려 있어 명시적으로 종료
