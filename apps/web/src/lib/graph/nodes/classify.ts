@@ -10,7 +10,9 @@ const ClassifySchema = z.object({
   isChitchat: z.boolean().describe("인사·감사·잡담처럼 문서가 전혀 필요 없는 메시지일 때만 true"),
   searchQuery: z
     .string()
-    .describe("대화 맥락 없이도 이해되도록 마지막 질문을 풀어 쓴 독립 질문(사용자와 같은 언어). isChitchat이 true면 빈 문자열"),
+    .describe(
+      "대화 맥락 없이도 이해되는 독립 질문(사용자와 같은 언어). 마지막 질문이 이미 혼자서 이해되면 그대로. isChitchat이 true면 빈 문자열",
+    ),
   subQueries: z
     .array(z.string())
     .describe("searchQuery를 주제별로 나눈 하위 질문 목록(1~3개, 사용자와 같은 언어). isChitchat이 true면 빈 배열"),
@@ -26,12 +28,15 @@ const PROMPT = `당신은 LangChain JS/TS 공식 문서 검색 챗봇의 라우�
 대화의 마지막 사용자 메시지를 보고 문서 검색이 필요한지 판단하세요.
 LangChain·LangGraph·에이전트·LLM·코드에 관한 질문은 모두 검색이 필요합니다(isChitchat: false).
 인사, 감사, 잡담처럼 문서가 전혀 필요 없을 때만 isChitchat이 true이고, 애매하면 false로 하세요.
-검색이 필요하면, "그거 예시는?" 같은 후속 질문도 앞선 대화를 반영해 혼자서 이해되는 질문으로 바꿔 searchQuery에 쓰세요.
+검색이 필요하면 searchQuery를 쓰세요. 검색은 문서와 표현이 가까울수록 잘 되므로 사용자의 표현을 최대한 유지합니다.
+- 마지막 질문이 혼자서 이해되면 고치지 말고 그대로 쓰세요. "응답이 너무 느려" 같은 증상이나 에러 메시지를 "~하는 방법"으로 바꾸지 않습니다.
+- "그거 예시는?" 같은 후속 질문만 앞선 대화에서 가리키는 대상을 채워 혼자서 이해되는 질문으로 바꾸세요.
+- 질문과 앞선 대화에 프레임워크 단서가 없으면 프레임워크 이름(LangChain·LangGraph·Deep Agents)을 하나 골라 붙이지 마세요. 문서가 어느 프레임워크에 있는지는 검색이 찾습니다.
 
 subQueries: 주제마다 따로 검색할 수 있도록 searchQuery를 나눈 하위 질문 목록입니다.
 - 서로 다른 주제(기능·API·개념) 여러 개를 함께 묻거나 둘을 비교하면, 주제마다 혼자서 이해되는 질문 하나씩으로 나누세요 (최대 3개). 예: "checkpointer와 store는 뭐가 다르고 각각 언제 써?" → ["checkpointer는 무엇이고 언제 쓰나", "store는 무엇이고 언제 쓰나"]
 - 주제가 하나면 searchQuery와 같은 질문 하나만 넣으세요. 한 주제의 여러 측면(예: "스트리밍 설정과 예시")은 나누지 않습니다.
-- 질문에 밝힌 프레임워크·API 이름은 각 하위 질문에도 그대로 넣으세요.
+- 질문에 밝힌 프레임워크·API 이름은 각 하위 질문에도 그대로 넣고, 하위 질문도 사용자의 표현을 유지하세요. 단서 없이 프레임워크 이름을 하나 골라 붙이지 않는 것도 같습니다.
 
 frameworkCandidates: 문서는 langchain(createAgent·미들웨어), langgraph(StateGraph·그래프), deepagents(createDeepAgent)로 나뉘고,
 메모리·스트리밍·human-in-the-loop·서브에이전트처럼 같은 주제가 여러 프레임워크에 따로 있습니다.
