@@ -1,166 +1,153 @@
 # pgvector-docs-chat 프로젝트 계획
 
-## 개요
-LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는 포트폴리오 프로젝트
+LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는 포트폴리오 프로젝트입니다.
+결정 근거는 [docs/adr](docs/adr/), 평가 결과는 [README](README.md#검색-품질-평가), DB 구조는 [docs/schema.md](docs/schema.md)에 정리합니다.
+
+## 진행 현황
+
+| Phase | 내용 | 상태 | 핵심 결과 |
+| --- | --- | :---: | --- |
+| 1 | 데이터 파이프라인 | ✅ | 141페이지 → 3,049청크, 바뀐 페이지만 재임베딩 |
+| 2 | LangGraph 워크플로우 | ✅ | 분류 → 검색 → 품질 판단 → 재검색 루프 → 답변 |
+| 3 | 챗봇 UI·배포 | ✅ | 스트리밍, 출처 표시, Vercel 배포 |
+| 4 | 검색 품질 평가 | ✅ | Hit@5 98%, MRR 0.858 (50문항) |
+| 5 | 대화 저장과 분기 | ✅ | PostgresSaver, 질문 수정 시 분기(fork) |
+| 6 | 애매한 질문 되묻기 | ✅ | interrupt + 프레임워크 필터 검색 |
+| 7 | 복합 질문 분해·병렬 검색 | ✅ | 복합 질문 2~3/10 → 8/10, 단일 질문 43 → 49/50 |
+| 8 | 답변 코드 검증 | ⬜ | |
+| 9 | 사용자 피드백 수집 | ⬜ | |
+| 10 | 문서 변경 추적 | ⬜ | |
+
+### 남은 작업 (Phase 7 후속)
+
+- [x] classify 검색어 규칙 수정(사용자 표현 유지, 근거 없는 프레임워크 이름 추가 금지): 단일 질문 44·45 → 49/50, 복합 질문 8/10 유지, 되묻기 recall 21·22/22·precision 21/23·22/24 ([ADR-008](docs/adr/ADR-008-search-query-keeps-user-wording.md))
+- [ ] 단일 질문의 그래프 경유 LLM 호출 증가량 측정 (`eval-compound --graph --single`, ADR-007 TODO) → 세부 측면 분할 억제 여부 판단
 
 ## 기술 스택
-- Next.js (App Router) — 프론트 + API Routes
-- LangGraph + LangChain — AI 워크플로우
-- Gemini 3.8 Flash — LLM (로컬 개발 시 `LLM_PROVIDER=ollama`로 Ollama 전환 가능)
-- Gemini Embedding API (`gemini-embedding-001`, 1536차원) — 텍스트 임베딩
-- PostgreSQL + pgvector — 벡터 저장 및 유사도 검색 (Neon 호스팅)
-- Vercel — 배포
 
-## 데이터 소스
-- LangChain 공식 문서 TypeScript 섹션: langchain, langgraph, deepagents, concepts (141페이지, 약 400만 자)
-- 인덱스: https://docs.langchain.com/_llms/agent-development-lifecycle/build/type-script.md (페이지별 `.md` 원본 제공)
-- 크롤링 → 청킹 → 임베딩 → pgvector 저장
+- **앱**: Next.js 14 (App Router), Vercel 배포
+- **워크플로우**: LangGraph + LangChain (JS)
+- **LLM**: Gemini 3.8 Flash, 실패 시 3.5 Flash → 3.1 Flash Lite 순으로 자동 전환 ([ADR-003](docs/adr/ADR-003-llm-model-fallback.md)). 로컬 개발 시 `LLM_PROVIDER=ollama`로 전환 가능
+- **임베딩**: `gemini-embedding-001` (1536차원)
+- **DB**: Neon PostgreSQL + pgvector (HNSW), 대화 체크포인트는 `langgraph` 스키마
 
 ## LangGraph 워크플로우
-1. **의도 분류 노드**: 문서 검색이 필요한 질문인지 판단
-2. **RAG 검색 노드**: pgvector 유사도 검색으로 관련 청크 추출
-3. **품질 판단 노드**: 검색 결과가 충분한지 평가
-4. **재검색 루프**: 불충분하면 쿼리 재작성 후 재검색 (최대 3회)
-5. **답변 생성 노드**: 검색 결과 기반 최종 답변 생성
 
-## Phase 1 — 데이터 파이프라인
-- [x] Neon 프로젝트 생성 및 pgvector 확장 활성화
-- [x] 문서 크롤링 스크립트 작성
-- [x] 청킹 전략 결정: MDX 정리 → 헤딩 단위 섹션 → 1500자/150 overlap 분할, 청크 앞에 `제목 > 섹션` 경로 부착 (`scripts/chunk.ts`)
-- [x] Gemini Embedding API로 임베딩 생성
-- [x] pgvector 테이블에 저장 (바뀐 페이지만 재임베딩, [ADR-002](docs/adr/ADR-002-incremental-sync.md))
+```
+classify ─┬─ (잡담) ───────────────────────────────────────────▶ generate
+          ├─ (애매함) ▶ clarify [interrupt] ─┐
+          └──────────────────────────────────┴▶ research × N ─▶ generate
+                                                (Send 병렬)
 
-## Phase 2 — LangGraph 워크플로우
-- [x] LangGraph 노드 설계 및 구현
-- [x] 의도 분류 로직
-- [x] RAG 검색 노드
-- [x] 재검색 루프 (Self-RAG 패턴)
-- [x] 답변 생성 노드
-
-## Phase 3 — Next.js 챗봇 UI
-- [x] 채팅 UI 구현
-- [x] 스트리밍 응답 처리
-- [x] 참조 문서 출처 표시
-- [x] Vercel 배포
-
-## Phase 4 — 검색 품질 평가
-- [x] 평가셋 50문항 (`scripts/eval/questions.json`): 섹션 단위 정답, 한/영, 상황 설명·API 이름·에러 메시지 유형
-- [x] 평가 스크립트 (`pnpm --filter scripts eval`): Hit@k·MRR, 질문 임베딩 캐시로 재실행 시 API 호출 없음
-- [x] 베이스라인 (벡터 검색, 2026-10-09): Hit@1 78% / Hit@5 98% / MRR 0.858 — 상위 5개 밖은 희귀 식별자 에러 질문 1건(`ContextOverflowError`)
-- [ ] 실사용 질문 추가 (현재 질문·정답을 모두 Claude가 작성해 편향 가능)
-- [x] 평가 결과를 보고 다음 개선 방향 결정: 검색은 충분(Hit@5 98%) → 하이브리드 검색 보류, LangGraph 기능 확장(Phase 5~7)으로 방향 결정
-
-## Phase 5 — 대화 저장과 분기 (checkpointer, time travel)
-목표: 대화를 서버에 스레드로 저장하고, 이전 질문을 수정하면 그 시점부터 대화가 갈라지게 한다. Phase 6(interrupt)의 전제 조건.
-
-설계
-- 지금은 클라이언트가 매 요청에 대화 전체를 보낸다 → `threadId` + 새 메시지만 보내고, 기록은 checkpointer가 가진다
-- `@langchain/langgraph-checkpoint-postgres`의 `PostgresSaver`를 Neon에 연결. 챗봇 계정(`DATABASE_URL`)은 읽기 전용이므로 checkpoint 테이블에만 쓸 수 있는 계정을 따로 둔다 (문서 테이블 쓰기 권한은 주지 않음)
-- 분기는 `getStateHistory`로 수정할 질문 직전 체크포인트를 찾고 `checkpoint_id`를 지정해 다시 실행(fork). 공식 프론트엔드 SDK(`useStream`)는 Agent Server(유료 플랜) 또는 분기 기능이 없는 커스텀 전송만 가능해 쓰지 않고 route에서 직접 구현 ([ADR-005](docs/adr/ADR-005-conversation-persistence.md))
-- 서버리스라 `PostgresSaver.setup()`(테이블 생성)은 요청마다 하지 않고 스크립트로 한 번 실행
-
-작업
-- [x] `@langchain/langgraph-checkpoint-postgres` 설치, langgraph 1.4.x와 버전 호환 확인 — 1.0.6은 채널 버전을 정수로 매겨 분기 간 blob이 충돌하므로 `getNextVersion` 재정의 (`checkpointer.ts`)
-- [x] Neon에 checkpoint 전용 스키마·계정 생성, `CHECKPOINT_DATABASE_URL` 추가 (.env.example, Vercel) → 확인: 이 계정으로 `doc_chunks` 쓰기가 거부되는지
-- [x] `scripts/setup-checkpointer.ts`로 테이블 생성
-- [x] `graph.compile({ checkpointer })`, route 요청 형식을 `{ threadId, message }`로 변경 → 확인: 같은 threadId로 두 번 질문하면 두 번째 답이 첫 대화를 이어받는지 (후속 질문 "그거 예시는?")
-- [x] `GET /api/threads/[id]`: 저장된 대화 불러오기, 클라이언트는 URL(`?thread=`)에 threadId 유지 → 확인: 새로고침·링크 공유 후 대화가 그대로 보이는지
-- [x] 재시도를 체크포인트 기준으로 변경 (실패한 실행 직전 체크포인트에서 다시 실행) → 확인: 실패 후 재시도해도 대화 기록에 실패한 턴이 남지 않는지
-- [x] 메시지 수정 → fork, 같은 위치의 분기를 `< 1/2 >`로 전환하는 UI → 확인: 분기를 오가도 각 분기의 이후 대화가 유지되는지
-- [x] 오래된 스레드 정리 방침 (체크포인트는 매 단계 쌓여 무한히 커짐): 보관 기간을 정하고 정리 스크립트 작성: 30일, `scripts/cleanup-threads.ts`
-- [x] README·schema.md 갱신, threadId(UUID)를 아는 사람은 대화를 볼 수 있다는 점 명시
-
-## Phase 6 — 애매한 질문 되묻기 (interrupt)
-목표: 질문이 LangChain / LangGraph / Deep Agents 중 어느 것에 대한 것인지 애매하면 그래프를 멈추고 선택지를 보여준 뒤, 고른 값으로 이어서 실행한다.
-
-설계
-- 같은 주제가 세 프레임워크 문서에 겹쳐 있다 (streaming, memory, human-in-the-loop, subagents 등 — 평가셋에서도 정답 페이지가 여러 곳)
-- classify 출력에 "대상 프레임워크"(하나로 특정 / 애매)를 추가하고, 애매하면 별도 `clarify` 노드에서 `interrupt({ question, options })`. 재개 시 노드가 처음부터 다시 실행되므로 interrupt 앞에 부수 효과를 두지 않는다
-- 고른 프레임워크로 검색 범위를 제한 (`source_url` 경로로 pgvector 쿼리에 메타데이터 필터) → 검색어만 바꾸는 것보다 확실하게 좁힘
-- route: updates 스트림의 `__interrupt__`를 `{"type":"interrupt", question, options}` 이벤트로 전달, 재개 요청은 `new Command({ resume })`로 같은 스레드에서 실행
-- LLM 호출 수는 그대로 (분류 출력 필드만 추가)
-
-작업
-- [x] classify 스키마에 대상 프레임워크 필드 추가, 프롬프트에 "명확하면 묻지 않는다" 기준 명시
-- [x] `clarify` 노드 + 그래프 분기 (classify → clarify → retrieve)
-- [x] `searchChunks`에 프레임워크 필터 추가 (`source_url LIKE` 경로 조건) → 확인: 필터 적용 시 다른 프레임워크 청크가 나오지 않는지 — HNSW 사후 필터로 결과가 모자라지 않게 필터 검색에서만 iterative scan 사용
-- [x] route에 interrupt 이벤트·resume 요청 처리
-- [x] UI: 선택지 버튼 + 직접 입력, 처리 과정에 "되물음 · LangGraph 선택" 단계 표시 → 확인: 새로고침 후에도 멈춘 질문이 다시 보이고 이어서 답할 수 있는지 (Phase 5 체크포인트) — 직접 입력은 프레임워크로 바꾸는 데 LLM 호출이 더 들어 빼고 "구분 없이 찾기" 선택지로 대신함. 선택하지 않고 새 질문을 보내면 멈춘 질문을 대체
-- [x] 되묻기 판단 평가: 애매한 질문·명확한 질문 각 10개로 "물어야 할 때 묻고, 안 물어야 할 때 안 묻는지" 측정 (LLM 호출이 필요하므로 Ollama 또는 한도 안에서 실행) — 23문항(후속 질문 3 포함), gemini-3.5-flash-lite 20/23 (recall 7/10, precision 7/7), qwen2.5:7b 14/23 (recall 1/10). 3.8-flash는 한도 소진으로 미측정
-
-## Phase 7 — 복합 질문 분해와 병렬 검색 (Send, 서브그래프)
-목표: "checkpointer와 store는 뭐가 다르고 각각 언제 써?"처럼 여러 주제를 묻는 질문을 하위 질문으로 나눠 동시에 검색하고, 합쳐서 답한다.
-
-설계
-- 지금의 retrieve → grade → rewrite 반복을 하위 질문 하나를 조사하는 서브그래프로 분리하고, 단일 질문도 같은 서브그래프를 1번 실행 (코드 경로 하나)
-- classify가 출력 필드로 하위 질문 1~3개를 함께 만들고 (별도 노드는 LLM 호출이 늘어 제외, ADR-007), `Send`로 서브그래프를 하위 질문 수만큼 병렬 실행
-- 각 분기 결과는 reducer로 합치고 중복 청크를 제거, 답변 컨텍스트는 상한(예: 8청크)을 둠. 인용 번호는 합친 순서 기준
-- 처리 과정 UI는 `subgraphs: true` 스트림의 namespace로 분기별 단계를 구분해 표시
-- 하위 질문마다 grade 호출이 생겨 LLM 호출이 가장 많이 늘어남 → 하위 질문 최대 3개, 분당 한도는 모델 자동 전환(Phase 4 이후 llm.ts)에 의존
-
-작업
-- [x] 평가셋에 비교·복합 질문 10개 추가 (하위 주제별 정답 섹션), 지표: 모든 하위 주제의 정답 섹션이 답변 컨텍스트에 들어간 비율 → 분해 전 베이스라인 먼저 측정 — `scripts/eval-compound.ts`, 검색 단계만 비교(grade·rewrite 제외). 기준선 2/10, 하위 주제 12/20 (2회 동일). 상위 10개·MMR·섹션 중복 제거로는 최대 4/10이라 분해로 결정, 분해는 classify 출력 필드로 해 LLM 호출 수 유지 ([ADR-007](docs/adr/ADR-007-compound-question-retrieval.md))
-- [x] 검색 반복 구간을 서브그래프로 분리 → 확인: 기존 평가 결과(Hit@5 98%)와 단일 질문 동작이 그대로인지 — `graph/research.ts`, 부모 상태가 서브그래프 상태 키를 공유. 라우트는 `subgraphs: true`로 안쪽 노드 이벤트를 그대로 전달. Hit@5 98% 유지, 잡담·단일 질문·되묻기 후 재개의 이벤트 순서와 대화 기록 불러오기가 분리 전과 동일
-- [x] 질문 분해 출력 + `Send` 병렬 실행 + 결과 병합 reducer — classify `subQueries` 출력, 하위 질문마다 research 서브그래프를 `Send`로 병렬 실행하고 `researched` reducer로 모아 generate에서 병합 (순위별 교차 + 섹션 중복 제거 + 8청크 상한, ADR-007). grade·rewrite는 하위 질문 기준으로 판단. 그래프 경유 측정(`eval-compound --graph`, 3.1-flash-lite 고정): 8/10·18/20 (2회 동일), 검색 단계만 측정한 값과 같고 기준선 2/10보다 6문항 높음
-- [x] 처리 과정 UI에 분기별 단계 표시 — 라우트가 research 실행의 namespace로 분기 번호를 붙여 전송(`branch` 이벤트, 안쪽 노드 이벤트의 `branch` 필드). 처리 과정 목록은 하위 질문이 2개 이상이면 하위 질문별로 묶어 표시하고, 그래프 패널은 research 서브그래프를 점선 상자로 그려 분기별 경로를 각각 칠하며 병렬 수(×N)를 표시
-- [x] 분해 전후 비교 평가, README에 결과 추가 → 확인: 복합 질문 지표가 오르고 단일 질문 지표는 떨어지지 않는지 — 복합 질문 2~3/10 → 8/10 (그래프 경유, 3회), 단일 질문 43/50 → 44·45/50 (`eval-compound --single`, 검색 단계). 단일 질문 절반가량이 2개로 분할되며(세부 측면 분할 11/50), 그래프 경유 LLM 호출 측정은 모델 과부하로 미완료 (ADR-007 TODO)
-
-## DB 스키마
-```sql
--- pgvector 확장 활성화
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- 문서 청크 저장
-CREATE TABLE doc_chunks (
-  id          BIGSERIAL PRIMARY KEY,
-  content     TEXT NOT NULL,
-  embedding   VECTOR(1536),
-  source_url  TEXT,
-  title       TEXT,
-  chunk_index INT,
-  created_at  TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 벡터 유사도 검색 인덱스 (HNSW)
-CREATE INDEX ON doc_chunks
-  USING hnsw (embedding vector_cosine_ops);
+research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)▶ rewrite ▶ retrieve … (최대 3회)
 ```
 
-## 폴더 구조
-pgvector-docs-chat/
-├── apps/
-│ └── web/ # Next.js 앱
-│ ├── src/
-│ │ ├── app/
-│ │ │ ├── page.tsx # 챗봇 UI
-│ │ │ └── api/
-│ │ │ └── chat/
-│ │ │ └── route.ts # LangGraph 호출
-│ │ └── lib/
-│ │ ├── graph/ # LangGraph 노드 정의
-│ │ │ ├── index.ts # 그래프 진입점
-│ │ │ ├── nodes/
-│ │ │ │ ├── classify.ts # 의도 분류
-│ │ │ │ ├── retrieve.ts # RAG 검색
-│ │ │ │ ├── grade.ts # 품질 판단
-│ │ │ │ └── generate.ts # 답변 생성
-│ │ │ └── state.ts # 그래프 상태 정의
-│ │ └── db/
-│ │ └── pgvector.ts # Neon 연결 + 검색
-│ ├── .env.example
-│ └── package.json
-├── scripts/
-│ ├── crawl.ts # 문서 크롤링
-│ ├── chunk.ts # 청킹
-│ └── embed.ts # 임베딩 + DB 저장
-├── docs/
-│ └── schema.md # DB 스키마 정의서
-├── package.json # pnpm workspace root
-├── pnpm-workspace.yaml
-├── plan.md
-└── README.md
+- **classify**: 검색 필요 여부, 독립 검색어, 하위 질문 1~3개, 프레임워크 후보를 LLM 호출 1회로 출력
+- **clarify**: 프레임워크가 애매하면 그래프를 멈추고 선택지를 보여준 뒤, 고른 값으로 검색 범위를 제한
+- **research**: 하위 질문마다 병렬 실행되며, 결과는 순위별 교차 병합·섹션 중복 제거 후 8청크로 제한
+- **generate**: 병합한 청크를 근거로 인용 번호를 붙여 답변
+
+---
+
+## 완료된 Phase
+
+<details>
+<summary><b>Phase 1~4</b> — 데이터 파이프라인, 워크플로우, UI, 검색 평가</summary>
+
+- **데이터**: MDX 정리 → 헤딩 단위 섹션 → 1500자/150 overlap 분할, 청크 앞에 `제목 > 섹션` 경로 부착. 청크 본문 비교로 바뀐 페이지만 재임베딩 ([ADR-001](docs/adr/ADR-001-embedding-model.md), [ADR-002](docs/adr/ADR-002-incremental-sync.md))
+- **워크플로우·UI**: 의도 분류, 검색, 재검색 루프(Self-RAG), 스트리밍 답변, 출처 표시, Vercel 배포
+- **평가**: 섹션 단위 정답 50문항(한/영, 상황 설명·API 이름·에러 메시지). 벡터 검색 기준 Hit@1 78% / Hit@5 98% / MRR 0.858
+- **결론**: 검색 품질은 충분하므로 하이브리드 검색은 보류하고 LangGraph 기능 확장으로 방향 결정 ([ADR-004](docs/adr/ADR-004-hybrid-search-deferred.md))
+- 미완료: 실사용 질문 추가 → Phase 9로 이관
+
+</details>
+
+<details>
+<summary><b>Phase 5</b> — 대화 저장과 분기 (checkpointer, time travel)</summary>
+
+- 요청 형식을 `{ threadId, message }`로 바꾸고, 대화 기록은 `PostgresSaver`가 보관 ([ADR-005](docs/adr/ADR-005-conversation-persistence.md))
+- checkpoint 전용 스키마·계정 분리 (문서 테이블 쓰기 권한 없음), 테이블 생성은 `setup-checkpointer` 스크립트로 1회 실행
+- 질문 수정 시 직전 체크포인트에서 다시 실행(fork), 같은 위치의 분기를 `< 1/2 >`로 전환
+- JS PostgresSaver가 분기 간 채널 버전이 겹치는 문제는 `getNextVersion` 재정의로 해결
+- 30일 넘게 활동이 없는 대화 정리 스크립트 (`cleanup-threads`)
+
+</details>
+
+<details>
+<summary><b>Phase 6</b> — 애매한 질문 되묻기 (interrupt)</summary>
+
+- classify가 프레임워크 후보를 함께 출력하고, 2개 이상이면 `clarify` 노드에서 `interrupt` ([ADR-006](docs/adr/ADR-006-framework-clarification.md))
+- 고른 프레임워크로 `source_url` 경로 필터 검색 (필터 검색에서만 HNSW iterative scan)
+- 새로고침 후에도 멈춘 질문을 다시 보여주고 이어서 답할 수 있음
+- 되묻기 판단 평가 49문항: recall 19/22, precision 100% (3.1-flash-lite). 이후 검색어 규칙 수정으로 recall 21·22/22, precision 21/23·22/24 (ADR-008)
+
+</details>
+
+<details>
+<summary><b>Phase 7</b> — 복합 질문 분해와 병렬 검색 (Send, 서브그래프)</summary>
+
+- 검색 반복 구간을 `research` 서브그래프로 분리하고, 하위 질문마다 `Send`로 병렬 실행 ([ADR-007](docs/adr/ADR-007-compound-question-retrieval.md))
+- 하위 질문은 별도 노드 없이 classify 출력 필드로 생성해 LLM 호출 수 유지
+- 처리 과정 목록·그래프 패널에 하위 질문별 진행 단계 표시
+- 결과: 복합 질문 2~3/10 → 8/10 (그래프 경유 3회), 단일 질문 43/50 → 44·45/50
+
+</details>
+
+---
+
+## Phase 8 — 답변 코드 검증
+
+**목표**: 답변에 들어간 TypeScript 코드를 실제 `@langchain/*` 타입 정의로 타입 검사하여, 존재하지 않는 API나 잘못된 시그니처를 LLM 판단이 아닌 컴파일러로 걸러낸다.
+
+**설계**
+- generate 뒤에 `verify` 노드 추가: 답변의 ` ```ts ` 코드 블록을 추출해 TS 컴파일러 API(`typescript` 5.x, 메모리 내 가상 파일 시스템)로 타입 검사
+- 문서 예시 코드는 일부만 발췌된 경우가 많으므로 **LangChain 패키지 API 관련 에러만** 판정 대상으로 삼는다 (예: TS2305 export 없음, TS2339 속성 없음, TS2345·TS2554 인자 불일치). 선언되지 않은 변수(TS2304) 등은 무시
+- 실패 시 `fix` 노드가 컴파일러 에러 메시지를 근거로 해당 코드 블록만 다시 생성 → 재검사 (최대 1회). 답변은 이미 스트리밍됐으므로 수정본은 답변 아래 "수정된 코드" 블록으로 덧붙인다
+- 타입 정의는 빌드 시 스크립트로 필요한 `.d.ts`만 모아 번들에 포함 (Vercel 함수 크기·콜드 스타트 고려)
+- LLM 호출은 검증 실패 시에만 1회 증가
+
+**작업**
+- [ ] 사전 검증: Vercel 함수에서 TS 컴파일러 + `.d.ts` 번들로 타입 검사가 가능한지, 번들 크기·첫 실행 시간 측정 → 불가하면 대안(빌드 시 미리 만든 API 목록과 대조) 검토
+- [ ] 코드 블록 추출 + 타입 검사 모듈, 판정 대상 에러 코드 목록 → 확인: 문서 원본 예시 코드 샘플이 오탐 없이 통과하는지
+- [ ] `verify` → `fix` 노드와 그래프 분기, route 이벤트(`{"type":"verify", ok, errors}`)
+- [ ] UI: 답변 아래 "코드 검증됨 ✓" / 에러 내용과 수정된 코드 표시, 그래프 패널에 노드 추가
+- [ ] 평가: 평가셋 일부(약 20문항)를 그래프 경유로 실행해 답변 코드의 API 에러 비율을 검증 전후로 비교 → README·ADR 기록
+
+## Phase 9 — 사용자 피드백 수집
+
+**목표**: 답변마다 👍/👎와 사유를 받아 저장하고, 👎 질문을 평가셋 후보로 모아 Phase 4의 "실사용 질문 추가" 과제를 해결한다.
+
+**설계**
+- 피드백은 `(thread_id, checkpoint_id)` 단위로 1건 (다시 누르면 갱신). 질문·검색어·출처 등 평가셋 작성에 필요한 정보는 체크포인트에서 조회하므로 피드백 테이블에는 저장하지 않는다
+- 저장 위치와 계정: 문서 테이블과 권한을 분리하는 기존 원칙에 따라 피드백 전용 테이블을 두고, 쓰기 권한 부여 범위를 결정한다 (checkpoint 계정 재사용 여부 → 결정 시 ADR)
+- 공개 엔드포인트이므로 존재하는 스레드·체크포인트에 대해서만 저장하고, 사유는 길이를 제한한다
+
+**작업**
+- [ ] 피드백 테이블·권한 생성, schema.md 갱신
+- [ ] `POST /api/feedback` (thread_id·checkpoint_id 존재 확인, 사유 길이 제한)
+- [ ] UI: 답변 하단 👍/👎, 👎 선택 시 사유 선택지(틀린 내용 / 관련 없는 문서 / 코드 오류 / 기타)와 입력란 → 확인: 새로고침 후에도 선택 상태 유지
+- [ ] `pnpm --filter scripts feedback-export`: 👎 질문을 질문·검색어·출처와 함께 평가셋 후보 JSON으로 출력
+- [ ] 수집된 실사용 질문으로 평가셋 보강, 기존 평가 결과와 비교 → README 기록
+
+## Phase 10 — 문서 변경 추적
+
+**목표**: 증분 동기화(ADR-002)를 주기적으로 실행하고, 바뀐 문서를 요약해 보여준다. 이전 대화가 인용한 문서가 이후 바뀌었으면 해당 대화에 표시한다.
+
+**설계**
+- 크롤링 → 청킹 → 임베딩 파이프라인은 실행 시간이 길어 Vercel Cron 대신 **GitHub Actions 예약 실행**(주 1회)으로 돌린다. DB 접속 정보는 Actions secret으로 관리
+- 동기화 시 페이지별 추가·변경·삭제 내역과 변경 섹션을 변경 이력 테이블에 기록 (기존 비교 로직 재사용, ADR-002의 비목표 "자동 갱신"을 변경하므로 ADR 갱신 또는 신규 작성)
+- 변경 요약은 페이지당 LLM 1회, 1회 실행당 요약 페이지 수 상한을 두어 무료 한도 안에서 처리. 임베딩 일일 한도(약 1,000건)를 넘는 변경은 다음 실행에서 이어서 처리
+- 이전 대화의 출처 URL과 변경 이력의 페이지·시각을 비교해 "인용 문서가 이후 변경됨" 표시
+
+**작업**
+- [ ] 변경 이력 테이블 설계, `embed` 스크립트가 변경 내역을 기록하도록 수정 → 확인: 변경 없는 재실행에서 이력이 생기지 않는지
+- [ ] GitHub Actions 워크플로우 (예약 + 수동 실행), 실패 시 다음 실행에서 이어지는지 확인
+- [ ] 변경 요약 생성 (페이지당 LLM 1회, 상한 적용)
+- [ ] UI: "최근 문서 변경" 목록 페이지, 대화의 출처 옆 "이후 변경됨" 표시
+- [ ] README·schema.md·ADR 갱신
 
 ## 참고
-- [LangGraph 공식 문서](https://langchain-ai.github.io/langgraphjs/)
+
+- [LangGraph.js 문서](https://langchain-ai.github.io/langgraphjs/)
 - [pgvector GitHub](https://github.com/pgvector/pgvector)
 - [Neon pgvector 가이드](https://neon.com/docs/extensions/pgvector)
