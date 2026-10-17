@@ -34,3 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Phase 8 사전 검증용 (scripts/bundle-types.mjs)
+/types-bundle
