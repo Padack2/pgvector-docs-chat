@@ -34,3 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 답변 코드 검증용 타입 정의 (scripts/bundle-types.mjs)
+/types-bundle
