@@ -6,6 +6,7 @@ import { graph } from "@/lib/graph";
 import { type ClarifyRequest, FRAMEWORK_LABELS } from "@/lib/graph/nodes/clarify";
 import type { Framework, GraphStateUpdate, ResearchStateUpdate } from "@/lib/graph/state";
 import type { Source } from "@/lib/threads";
+import type { VerifyResult } from "@/lib/verify";
 
 // Vercel 함수 최대 실행 시간(초). 이걸 넘기면 함수가 강제 종료돼 클라이언트는 에러 이벤트도 받지 못한다
 export const maxDuration = 60;
@@ -38,6 +39,8 @@ const BodySchema = z
 //   {"type":"step","node":"grade","isSufficient":false,"branch":0}
 //   {"type":"step","node":"rewrite","searchQuery":"...","branch":0}
 //   {"type":"token","text":"..."}                      답변 토큰 (generate 노드 것만)
+//   {"type":"verify","ok":false,"blocks":2,"errors":[{"block","line","code","api","message","inSource"}, ...]}
+//                                                      답변에 TS 코드 블록이 있을 때만 1회. inSource는 출처 문서 코드에도 같은 에러가 있는지
 //   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 하위 질문별 검색 결과를 합친 것으로, 순서가 답변의 [1], [2] 번호와 같다
 //   {"type":"interrupt","question":"...","options":[{"value","label"}, ...]}  되물음으로 그래프가 멈춤 (sources 없이 끝남)
 //   {"type":"error","message":"..."}                   스트리밍 도중 실패 (이미 200을 보낸 뒤라 상태 코드로 알릴 수 없음)
@@ -117,6 +120,11 @@ export async function POST(req: Request) {
                 // generate가 합친 답변 근거를 답변 메시지에 저장한다 (generate.ts)
                 const [answer] = update.messages as BaseMessage[];
                 sources = (answer.additional_kwargs.sources ?? []) as Source[];
+              } else if (node === "verify") {
+                // 코드 블록이 없으면 verify는 메시지를 바꾸지 않는다
+                const [answer] = (update.messages ?? []) as BaseMessage[];
+                const result = answer?.additional_kwargs.verify as VerifyResult | undefined;
+                if (result) send({ type: "verify", ok: result.errors.length === 0, ...result });
               }
             }
           }

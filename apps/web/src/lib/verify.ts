@@ -39,6 +39,8 @@ const options: ts.CompilerOptions = {
 
 export type CodeError = { code: number; api: string; line: number; message: string };
 export type VerifiedError = CodeError & { block: number; inSource: boolean };
+// blocks: 답변의 TS 코드 블록 수, errors: 판정된 에러 (block은 몇 번째 코드 블록인지, 0부터)
+export type VerifyResult = { blocks: number; errors: VerifiedError[] };
 
 // 라이브러리 .d.ts는 한 번 파싱해 두고 다음 검사에서 재사용한다 (첫 검사 약 2초, 이후 0.1~0.5초).
 // 모듈 해석 때 반복되는 파일·폴더 존재 확인도 캐시한다 (실행 중 types-bundle은 바뀌지 않음)
@@ -151,7 +153,7 @@ export function checkCode(code: string): { errors: CodeError[]; ignored: number[
 
 // 답변 코드를 검사하고, 에러가 있으면 출처 문서의 코드에도 같은 에러(에러 코드 + API 이름)가 있는지 표시한다.
 // 출처 코드 검사는 답변에 에러가 있을 때만 한다
-export function verifyAnswer(answer: string, sourceContents: string[]): { blocks: number; errors: VerifiedError[] } {
+export function verifyAnswer(answer: string, sourceContents: string[]): VerifyResult {
   const blocks = extractCodeBlocks(answer);
   const errors = blocks.flatMap((code, block) => checkCode(code).errors.map((e) => ({ ...e, block })));
   if (!errors.length) return { blocks: blocks.length, errors: [] };

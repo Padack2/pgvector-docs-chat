@@ -116,7 +116,9 @@ research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)�
   - `apps/web/src/lib/verify.ts`: 판정 대상은 에러 코드 10종(2305·2724·2614·2339·2551·2353·2345·2554·2769·2322) 중 선언 위치가 `@langchain/*`·`langchain`·`deepagents`인 API의 에러만. 출처 비교 키는 `에러 코드:API 이름`이며, 출처 코드는 답변에 에러가 있을 때만 검사한다. 타입 정의 대상에 `deepagents`·`@langchain/openai`·`@langchain/anthropic`을 devDependencies로 추가 (types-bundle 58패키지·25MB)
   - 문서 예시 1,873블록 측정 (2026-10-17, `pnpm --filter scripts verify-docs`): 판정 에러 블록 136개(7.3%)·36페이지. 제외된 에러는 TS2304 1,806건, TS2307 362건, TS1375 244건, TS7006 207건 등이며, 판정 대상 코드이지만 사용자 코드에서 난 에러 113건도 제외됨. 검사 시간 중앙값 127ms
   - 판정된 에러를 수동 확인한 결과 대부분 문서와 현재 타입 정의의 불일치였다 (예: deepagents `serverInfo`·`workingDirectory`·`temperature`, `createAgent`의 `prompt` → `systemPrompt`, `MemoryStore` → `InMemoryStore`, `AzureChatOpenAI`의 `azureOpenAIApiEndpoint`). 발췌 코드로 인한 오탐은 7건(인자가 `unknown`으로 추론된 경우, 일반 함수를 `tools`로 넘긴 경우, strict 모드의 `string | undefined`)으로 소수여서 별도 규칙은 두지 않음
-- [ ] `verify` 노드와 route 이벤트(`{"type":"verify", ok, errors}`, 에러마다 출처에도 있는지 여부 포함)
+- [x] `verify` 노드와 route 이벤트(`{"type":"verify", ok, errors}`, 에러마다 출처에도 있는지 여부 포함)
+  - generate → verify → END. 검사 결과는 답변 메시지의 `additional_kwargs.verify`에 저장하고, 코드 블록이 없으면 메시지를 바꾸지 않고 이벤트도 보내지 않는다. 검사 중 예외가 나도 답변은 유지한다
+  - 로컬 확인 (2026-10-18, dev 서버): InMemoryStore 예시 질문에서 TS2322(`search`, 출처에도 있음) 검출, createAgent 예시는 통과, 코드 없는 답변은 이벤트 없음. 따뜻한 상태의 검사는 1초 이내였으나, 서버 기동 직후 첫 요청은 전체 63초로 `maxDuration`(60초)을 넘었다(dev 컴파일과 /mnt/f의 첫 검사 포함). 타입 검사는 동기 실행이라 그래프 시간 제한(`AbortSignal`)으로 중단되지 않으므로, Vercel 배포 후 콜드 요청 시간을 확인해야 한다
 - [ ] UI: 답변 아래 "코드 검증됨 ✓" / 에러 내용과 출처 여부에 따른 경고 표시, 그래프 패널에 노드 추가
 - [ ] 평가: 평가셋 일부(약 20문항)를 그래프 경유로 실행해 답변 코드 중 API 에러가 있는 비율과 그중 "출처에도 있음/없음" 비율을 측정하고, 출처 비교 분류가 맞는지 수동 확인 → README·ADR 기록
 
