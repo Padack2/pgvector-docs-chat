@@ -15,6 +15,7 @@ LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangG
 - **애매한 질문 되묻기**: "메모리는 어떻게 써?"처럼 LangChain·LangGraph·Deep Agents 중 어느 것인지 알 수 없으면 그래프를 멈추고 선택지를 보여준 뒤, 고른 프레임워크 문서에서만 찾습니다.
 - **대화 저장과 분기**: 대화가 서버에 저장돼 새로고침하거나 링크(`?thread=`)를 공유해도 이어집니다. 이전 질문을 고치면 그 시점부터 대화가 갈라지고, `‹ 1/2 ›`로 분기를 오갈 수 있습니다.
 - **답변 코드 검증**: 답변의 TypeScript 코드를 실제 패키지 타입 정의로 타입 검사해, 존재하지 않는 API나 잘못된 인자를 찾아 경고합니다. 같은 에러가 참고한 문서 예시에도 있으면 "문서가 옛 API일 수 있음"으로 구분해 알립니다.
+- **답변 피드백**: 답변마다 👍/👎와 사유(틀린 내용 / 관련 없는 문서 / 코드 오류 / 기타)를 받아 저장합니다. 👎 받은 답변은 질문·검색어·출처와 함께 평가셋 후보로 내보낼 수 있습니다.
 - **처리 과정 표시**: 그래프의 각 단계(검색어, 찾은 청크 수, 평가 결과)를 실시간으로 보여주고, 답변이 시작되면 접어 둡니다. 하위 질문이 여러 개면 하위 질문별로 묶어 보여주고, 우측 패널에 그래프에서 지나온 경로를 표시합니다.
 - **장애 대응**: 모델 실패 시 다른 모델로 자동 전환하고, 응답이 없으면 시간 제한 후 재시도 버튼을 보여줍니다.
 
@@ -84,6 +85,7 @@ flowchart TD
 - 질문 수정·재시도는 그 질문이 들어가기 직전 체크포인트에서 다시 실행(fork)해 형제 분기를 만듭니다. `GET /api/threads/[id]`가 `getStateHistory`로 체크포인트 트리를 읽어 지금 보이는 분기의 대화와 질문별 분기 목록을 돌려줍니다 ([`threads.ts`](apps/web/src/lib/threads.ts)).
 - 답변 없이 실패한 실행은 재시도로 대체된 것이므로 분기 목록에서 숨깁니다.
 - 체크포인트 전용 DB 계정은 자기 스키마만 쓸 수 있고 문서 테이블에는 접근할 수 없습니다 ([schema.md](docs/schema.md#대화-체크포인트-langgraph-스키마)).
+- 답변 피드백은 같은 계정이 소유한 `feedback` 스키마에 체크포인트 id만 저장하고, 질문·검색어·출처는 필요할 때 그 체크포인트에서 읽습니다. 로그인 없는 공개 API이므로 존재하는 체크포인트에만 저장합니다 ([ADR-010](docs/adr/ADR-010-feedback-storage.md)).
 
 ## 검색 품질 평가
 
@@ -205,7 +207,8 @@ apps/web/src/
 ├── app/
 │   ├── page.tsx              # 채팅 UI (스트림 파싱, 처리 과정, 재시도, 질문 수정·분기 전환)
 │   ├── api/chat/route.ts     # 그래프 실행 → NDJSON 이벤트 스트림
-│   └── api/threads/[id]/route.ts  # 저장된 대화 불러오기
+│   ├── api/threads/[id]/route.ts  # 저장된 대화 불러오기
+│   └── api/feedback/route.ts # 답변 피드백 저장
 ├── components/AnswerMarkdown.tsx  # 마크다운 + [n] 인용 배지
 ├── components/GraphPanel.tsx      # 처리 과정 그래프 (지나온 경로·병렬 분기 표시)
 └── lib/
@@ -213,6 +216,7 @@ apps/web/src/
     ├── db/pgvector.ts        # 유사도 검색 (읽기 전용 계정)
     ├── db/checkpointer.ts    # 대화 체크포인트 저장 (PostgresSaver)
     ├── threads.ts            # 체크포인트 트리 → 화면용 대화·분기 목록
+    ├── feedback.ts           # 답변 피드백 저장·조회
     ├── verify.ts             # 답변 코드 타입 검사, 출처 비교 (source-errors.json: 페이지별 문서 예시 에러)
     ├── embedding.ts          # Gemini 임베딩 (저장·검색 공용)
     └── llm.ts                # LLM 호출, 모델 자동 전환
@@ -223,7 +227,8 @@ scripts/
 ├── eval-compound.ts, eval/compound-questions.json  # 복합 질문 평가 (--single: 단일 질문 비교)
 ├── verify-docs.ts                  # 문서 예시 코드 타입 검사 (--write: source-errors.json 생성)
 ├── eval-verify.ts                  # 답변 코드 검증 평가
-└── setup-checkpointer.ts / cleanup-threads.ts  # 체크포인트 테이블 생성, 오래된 대화 정리
+├── feedback-export.ts              # 👎 답변을 평가셋 후보 JSON으로 출력
+└── setup-checkpointer.ts / setup-feedback.ts / cleanup-threads.ts  # 체크포인트·피드백 테이블 생성, 오래된 대화 정리
 docs/
 ├── schema.md                 # DB 스키마
 └── adr/                      # 설계 결정 기록
@@ -238,7 +243,7 @@ pnpm install
 cp apps/web/.env.example apps/web/.env.local   # 값 채우기
 ```
 
-DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 계정 3개(임베딩 저장용, 챗봇 검색용 읽기 전용, 대화 체크포인트용)를 준비합니다. 체크포인트 테이블은 schema.md의 절차대로 `pnpm --filter scripts setup-checkpointer`로 만듭니다.
+DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 계정 3개(임베딩 저장용, 챗봇 검색용 읽기 전용, 대화 체크포인트용)를 준비합니다. 체크포인트·피드백 테이블은 schema.md의 절차대로 `pnpm --filter scripts setup-checkpointer`, `setup-feedback`으로 만듭니다.
 
 ```bash
 # 데이터 적재 (data/ 아래에 중간 결과 저장)
@@ -260,6 +265,9 @@ pnpm --filter scripts verify-docs -- --write
 
 # 답변 코드 검증 평가 (질문당 LLM 3~10회)
 pnpm --filter scripts eval-verify
+
+# 👎 피드백을 평가셋 후보로 내보내기
+pnpm --filter scripts feedback-export -- --out candidates.json
 
 # 30일 넘게 활동이 없는 대화 정리 (기본은 대상만 출력)
 pnpm --filter scripts cleanup-threads -- --delete
@@ -294,4 +302,5 @@ pnpm dev
 - [ADR-007: 복합 질문 분해 후 개별 검색](docs/adr/ADR-007-compound-question-retrieval.md)
 - [ADR-008: classify 검색어는 사용자 표현 유지](docs/adr/ADR-008-search-query-keeps-user-wording.md)
 - [ADR-009: 답변 코드 검증 결과는 출처 비교 경고로 표시](docs/adr/ADR-009-answer-code-verification.md)
+- [ADR-010: 답변 피드백 저장 위치](docs/adr/ADR-010-feedback-storage.md)
 - [개발 계획과 진행 상황](plan.md)
