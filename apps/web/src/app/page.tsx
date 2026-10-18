@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
 import { GraphPanel, type GraphRun, type NodeName } from "@/components/GraphPanel";
+import type { Feedback, FeedbackReason } from "@/lib/feedback";
 import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
 import type { ThreadView } from "@/lib/threads";
 import type { VerifiedError, VerifyResult } from "@/lib/verify";
@@ -33,6 +34,9 @@ type Message = {
   error?: string;
   // 되물음으로 그래프가 멈춰 있으면 그 질문과 선택지 (assistant만)
   clarify?: ClarifyRequest;
+  // 답변(assistant)만: 이 답변으로 끝난 턴의 체크포인트와 저장된 피드백. 스트리밍 중에는 없고 다시 불러온 뒤에 생긴다
+  checkpointId?: string;
+  feedback?: Feedback;
   // 질문(user)만: 수정·재시도 때 fork할 체크포인트와 같은 위치의 분기들 (lib/threads.ts)
   forkFrom?: string;
   branches?: string[];
@@ -340,6 +344,154 @@ function VerifyNotice({ verify }: { verify: VerifyResult }) {
           </p>
           <VerifyErrorList errors={inherited} blocks={verify.blocks} />
         </div>
+      )}
+    </div>
+  );
+}
+
+const REASON_LABELS: Record<FeedbackReason, string> = {
+  wrong: "틀린 내용",
+  irrelevant: "관련 없는 문서",
+  code: "코드 오류",
+  other: "기타",
+};
+const FEEDBACK_REASON_KEYS = Object.keys(REASON_LABELS) as FeedbackReason[];
+
+function ThumbIcon({ down }: { down?: boolean }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden className={`size-4 ${down ? "rotate-180" : ""}`}>
+      <path d="M2 9.5A1.5 1.5 0 0 1 3.5 8h1A1.5 1.5 0 0 1 6 9.5v7A1.5 1.5 0 0 1 4.5 18h-1A1.5 1.5 0 0 1 2 16.5v-7ZM7.5 16.6V9.2a3 3 0 0 1 .6-1.8l3.3-4.6A1.4 1.4 0 0 1 13.9 4l-.6 3h3.2A2 2 0 0 1 18.5 9.4l-1.3 6.5A2.6 2.6 0 0 1 14.6 18H9a1.5 1.5 0 0 1-1.5-1.4Z" />
+    </svg>
+  );
+}
+
+// 답변 하단 👍/👎. 👎을 누르면 바로 저장하고, 사유를 고르거나 적어 보내면 같은 피드백을 갱신한다
+function FeedbackBar({
+  threadId,
+  checkpointId,
+  initial,
+}: {
+  threadId: string;
+  checkpointId: string;
+  initial?: Feedback;
+}) {
+  const [saved, setSaved] = useState(initial);
+  const [reason, setReason] = useState<FeedbackReason | null>(initial?.reason ?? null);
+  const [comment, setComment] = useState(initial?.comment ?? "");
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const [status, setStatus] = useState<"idle" | "saving" | "error">("idle");
+
+  async function submit(feedback: Feedback) {
+    setStatus("saving");
+    const res = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        threadId,
+        checkpointId,
+        rating: feedback.rating,
+        reason: feedback.reason ?? undefined,
+        comment: feedback.comment ?? undefined,
+      }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      setStatus("error");
+      return false;
+    }
+    setSaved(feedback);
+    setStatus("idle");
+    return true;
+  }
+
+  function rate(rating: Feedback["rating"]) {
+    if (rating === "up") {
+      setReasonOpen(false);
+      return submit({ rating, reason: null, comment: null });
+    }
+    setReasonOpen(true);
+    if (saved?.rating !== "down") submit({ rating, reason: null, comment: null });
+  }
+
+  const thumbClass = (active: boolean) =>
+    `rounded-md p-1.5 hover:text-foreground disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${active ? "bg-accent-soft text-accent" : ""}`;
+  return (
+    <div className="text-sm text-muted">
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => rate("up")}
+          disabled={status === "saving"}
+          aria-label="도움이 됐어요"
+          aria-pressed={saved?.rating === "up"}
+          className={thumbClass(saved?.rating === "up")}
+        >
+          <ThumbIcon />
+        </button>
+        <button
+          onClick={() => rate("down")}
+          disabled={status === "saving"}
+          aria-label="아쉬워요"
+          aria-pressed={saved?.rating === "down"}
+          className={thumbClass(saved?.rating === "down")}
+        >
+          <ThumbIcon down />
+        </button>
+        {status === "error" && <span className="ml-1 text-danger-text">저장하지 못했어요. 다시 눌러 주세요</span>}
+        {status === "idle" && saved && !reasonOpen && <span className="ml-1">의견 고마워요</span>}
+      </div>
+      {reasonOpen && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit({ rating: "down", reason, comment: comment.trim() || null }).then(
+              (ok) => ok && setReasonOpen(false),
+            );
+          }}
+          className="mt-2 space-y-2 rounded-lg border border-line bg-surface p-3"
+        >
+          <p className="text-foreground">어떤 점이 아쉬웠나요?</p>
+          <div className="flex flex-wrap gap-2">
+            {FEEDBACK_REASON_KEYS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setReason(reason === key ? null : key)}
+                aria-pressed={reason === key}
+                className={`rounded-lg border px-3 py-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${reason === key ? "border-accent text-accent" : "border-line hover:border-accent hover:text-accent"}`}
+              >
+                {REASON_LABELS[key]}
+              </button>
+            ))}
+          </div>
+          <label htmlFor={`feedback-${checkpointId}`} className="sr-only">
+            자세한 내용
+          </label>
+          <textarea
+            id={`feedback-${checkpointId}`}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            // 서버 제한과 같음 (lib/feedback.ts의 COMMENT_MAX_LENGTH, 서버 모듈이라 화면에서 import하지 않음)
+            maxLength={500}
+            rows={2}
+            placeholder="자세한 내용 (선택)"
+            className="w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-foreground outline-none focus:border-accent"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setReasonOpen(false)}
+              className="rounded-lg px-3 py-1.5 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              닫기
+            </button>
+            <button
+              type="submit"
+              disabled={status === "saving"}
+              className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-surface disabled:opacity-35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              보내기
+            </button>
+          </div>
+        </form>
       )}
     </div>
   );
@@ -744,6 +896,14 @@ export default function Home() {
                       ))}
                     </ul>
                   </div>
+                )}
+                {message.checkpointId && threadId && !(isLoading && i === messages.length - 1) && (
+                  <FeedbackBar
+                    key={message.checkpointId}
+                    threadId={threadId}
+                    checkpointId={message.checkpointId}
+                    initial={message.feedback}
+                  />
                 )}
               </article>
             ),

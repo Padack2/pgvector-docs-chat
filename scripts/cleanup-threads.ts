@@ -2,7 +2,8 @@
 // 체크포인트는 노드 실행마다 쌓여(질문 1개에 약 5~10개, 개당 수 KB) 지우지 않으면 계속 커진다.
 // 기본은 지울 대상만 출력하고, --delete를 붙여야 실제로 지운다: pnpm --filter scripts cleanup-threads -- --delete
 import pg from "pg";
-import { CHECKPOINT_SCHEMA, checkpointer } from "../apps/web/src/lib/db/checkpointer";
+import { CHECKPOINT_SCHEMA, checkpointPool, checkpointer } from "../apps/web/src/lib/db/checkpointer";
+import { FEEDBACK_SCHEMA } from "../apps/web/src/lib/feedback";
 
 const RETENTION_DAYS = 30;
 const shouldDelete = process.argv.includes("--delete");
@@ -24,7 +25,12 @@ console.log(`threads inactive for ${RETENTION_DAYS}+ days: ${rows.length}`);
 for (const row of rows) console.log(`  ${row.thread_id}  last active ${row.last_active.toISOString()}`);
 if (shouldDelete) {
   for (const row of rows) await checkpointer.deleteThread(row.thread_id);
-  console.log(`deleted ${rows.length} threads`);
+  // 피드백은 체크포인트에서 질문·출처를 조회해야 쓸 수 있으므로 대화와 함께 지운다
+  const feedback = await checkpointPool.query(
+    `DELETE FROM ${FEEDBACK_SCHEMA}.answer_feedback WHERE thread_id = ANY($1)`,
+    [rows.map((row) => row.thread_id)],
+  );
+  console.log(`deleted ${rows.length} threads, ${feedback.rowCount} feedback`);
 } else if (rows.length > 0) {
   console.log("dry run: add --delete to remove them");
 }

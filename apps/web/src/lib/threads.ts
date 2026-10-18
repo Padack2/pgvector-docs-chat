@@ -2,6 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { graph } from "./graph";
 import type { ClarifyRequest } from "./graph/nodes/clarify";
+import { type Feedback, loadFeedback } from "./feedback";
 import type { VerifyResult } from "./verify";
 
 export type Source = { title: string; url: string };
@@ -17,7 +18,15 @@ export type ThreadMessage =
       branchIndex: number;
     }
   // verify: 답변 코드 타입 검사 결과 (코드 블록이 없으면 없음)
-  | { role: "assistant"; content: string; sources: Source[]; verify?: VerifyResult };
+  // checkpointId: 이 답변으로 끝난 턴의 마지막 체크포인트. 피드백은 이 id로 저장한다 (feedback: 저장된 피드백)
+  | {
+      role: "assistant";
+      content: string;
+      sources: Source[];
+      verify?: VerifyResult;
+      checkpointId: string;
+      feedback?: Feedback;
+    };
 
 export type ThreadView = {
   messages: ThreadMessage[];
@@ -39,7 +48,9 @@ const byCreatedAt = (a: StateSnapshot, b: StateSnapshot) => (a.createdAt ?? "").
 
 export async function loadThread(threadId: string, checkpointId?: string): Promise<ThreadView | null> {
   const all: StateSnapshot[] = [];
+  const feedbackLoaded = loadFeedback(threadId);
   for await (const snapshot of graph.getStateHistory({ configurable: { thread_id: threadId } })) all.push(snapshot);
+  const feedback = await feedbackLoaded;
   if (all.length === 0) return checkpointId ? null : { messages: [], checkpointId: null, interrupt: null };
 
   const byId = new Map(all.map((s) => [idOf(s), s]));
@@ -79,7 +90,17 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
     if (message.getType() !== "human") {
       const sources = (message.additional_kwargs?.sources ?? []) as Source[];
       const verify = message.additional_kwargs?.verify as VerifyResult | undefined;
-      return { role: "assistant", content: message.text, sources, verify };
+      // 턴의 끝은 다음 턴 시작(input 체크포인트)의 부모, 마지막 턴이면 분기의 끝
+      const next = pathTurnStarts[turn];
+      const checkpointId = (next ? parentIdOf(next) : undefined) ?? idOf(leaf);
+      return {
+        role: "assistant",
+        content: message.text,
+        sources,
+        verify,
+        checkpointId,
+        feedback: feedback.get(checkpointId),
+      };
     }
     const start = pathTurnStarts[turn++];
     const forkFrom = forkPointOf(start);

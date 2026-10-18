@@ -17,8 +17,7 @@ class BranchSafePostgresSaver extends PostgresSaver {
   }
 }
 
-export const checkpointer = new BranchSafePostgresSaver(
-  new pg.Pool({ connectionString: process.env.CHECKPOINT_DATABASE_URL }),
-  undefined,
-  { schema: CHECKPOINT_SCHEMA },
-);
+// 답변 피드백(feedback 스키마)도 같은 계정·연결로 저장한다 (lib/feedback.ts)
+export const checkpointPool = new pg.Pool({ connectionString: process.env.CHECKPOINT_DATABASE_URL });
+
+export const checkpointer = new BranchSafePostgresSaver(checkpointPool, undefined, { schema: CHECKPOINT_SCHEMA });
