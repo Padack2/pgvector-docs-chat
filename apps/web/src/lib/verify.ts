@@ -2,6 +2,8 @@
 // 타입 정의는 scripts/bundle-types.mjs가 dev·build 전에 types-bundle/에 모아 둔다
 import path from "node:path";
 import ts from "typescript";
+// 문서 페이지 URL → 그 페이지 예시 코드의 판정 에러 키. scripts/verify-docs.ts --write가 만든다
+import sourceErrors from "./source-errors.json";
 
 // 판정 대상 에러: LangChain 패키지 API를 잘못 쓴 경우만. 발췌 코드에서 흔한 선언 없는 변수(TS2304) 등은 제외한다
 export const JUDGED_CODES = new Set([
@@ -151,14 +153,15 @@ export function checkCode(code: string): { errors: CodeError[]; ignored: number[
   return { errors, ignored };
 }
 
-// 답변 코드를 검사하고, 에러가 있으면 출처 문서의 코드에도 같은 에러(에러 코드 + API 이름)가 있는지 표시한다.
-// 출처 코드 검사는 답변에 에러가 있을 때만 한다
-export function verifyAnswer(answer: string, sourceContents: string[]): VerifyResult {
+// 답변 에러와 문서 에러를 비교하는 키 (에러 코드 + API 이름)
+export const errorKey = (e: CodeError) => `${e.code}:${e.api}`;
+
+// 답변 코드를 검사하고, 에러가 있으면 출처 문서 페이지의 예시 코드에도 같은 에러가 있는지 표시한다.
+// 출처 청크가 아니라 페이지 전체로 비교한다 (청크는 코드 블록이 경계에서 잘려 있어 추출되지 않는 경우가 많음)
+export function verifyAnswer(answer: string, sourceUrls: string[]): VerifyResult {
   const blocks = extractCodeBlocks(answer);
   const errors = blocks.flatMap((code, block) => checkCode(code).errors.map((e) => ({ ...e, block })));
-  if (!errors.length) return { blocks: blocks.length, errors: [] };
-  const sourceKeys = new Set(
-    sourceContents.flatMap(extractCodeBlocks).flatMap((code) => checkCode(code).errors.map((e) => `${e.code}:${e.api}`)),
-  );
-  return { blocks: blocks.length, errors: errors.map((e) => ({ ...e, inSource: sourceKeys.has(`${e.code}:${e.api}`) })) };
+  const pages = sourceErrors as Record<string, string[]>;
+  const sourceKeys = new Set(sourceUrls.flatMap((url) => pages[url] ?? []));
+  return { blocks: blocks.length, errors: errors.map((e) => ({ ...e, inSource: sourceKeys.has(errorKey(e)) })) };
 }

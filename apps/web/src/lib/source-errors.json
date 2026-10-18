@@ -1,0 +1,146 @@
+{
+  "https://docs.langchain.com/oss/javascript/concepts/context": [
+    "2305:AgentState"
+  ],
+  "https://docs.langchain.com/oss/javascript/concepts/memory": [
+    "2353:InMemoryStore"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/backends": [
+    "2339:executionInfo",
+    "2339:serverInfo",
+    "2353:LocalShellBackend"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/customization": [
+    "2322:createDeepAgent",
+    "2339:serverInfo",
+    "2339:structuredResponse",
+    "2353:LocalShellBackend",
+    "2353:createDeepAgent",
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/going-to-production": [
+    "2339:context",
+    "2339:serverInfo"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/memory": [
+    "2305:createFileData",
+    "2339:context",
+    "2339:serverInfo",
+    "2353:search",
+    "2551:threadId"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/skills": [
+    "2322:createDeepAgent",
+    "2339:context",
+    "2769:StoreBackend"
+  ],
+  "https://docs.langchain.com/oss/javascript/deepagents/subagents": [
+    "2769:createAgent"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/context-engineering": [
+    "2339:authenticated",
+    "2339:uploadedFiles"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/guardrails": [
+    "2353:humanInTheLoopMiddleware"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/long-term-memory": [
+    "2322:fromConnString",
+    "2353:InMemoryStore"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/middleware/built-in": [
+    "2769:createAgent"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/middleware/overview": [
+    "2305:AgentState"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/models": [
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/multi-agent/handoffs-customer-support": [
+    "2724:SummarizationMiddleware",
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/multi-agent/router-knowledge-base": [
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/multi-agent/skills-sql-assistant": [
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/multi-agent/subagents": [
+    "2305:AgentState",
+    "2769:createAgent"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/multi-agent/subagents-personal-assistant": [
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/runtime": [
+    "2551:get"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/sql-agent": [
+    "2769:AzureChatOpenAI"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/structured-output": [
+    "2339:structuredResponse",
+    "2769:providerStrategy",
+    "2769:toolStrategy"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/test/unit-testing": [
+    "2345:invoke"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/add-memory": [
+    "2322:RemoveMessage",
+    "2322:search",
+    "2345:invoke",
+    "2345:trimMessages"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/choosing-apis": [
+    "2345:entrypoint"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/fault-tolerance": [
+    "2769:addNode"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/interrupts": [
+    "2339:__interrupt__"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/persistence": [
+    "2724:MemoryStore"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/pregel": [
+    "2305:ChannelWriteEntry",
+    "2305:NodeBuilder",
+    "2353:BinaryOperatorAggregate"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/stores": [
+    "2724:MemoryStore"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/streaming": [
+    "2305:createAgent",
+    "2339:topic",
+    "2353:stream",
+    "2769:useStream"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/studio": [
+    "2305:createAgent"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/use-functional-api": [
+    "2305:InMemoryCache",
+    "2322:ToolMessage",
+    "2353:task",
+    "2554:StateGraph",
+    "2554:invoke",
+    "2769:streamEvents"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/use-graph-api": [
+    "2551:subject",
+    "2769:StateGraph"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/use-subgraphs": [
+    "2339:messages",
+    "2769:createAgent",
+    "2769:streamEvents"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/workflows-agents": [
+    "2345:addMessages"
+  ]
+}
