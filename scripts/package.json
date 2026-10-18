@@ -11,7 +11,8 @@
     "eval-compound": "tsx --no-warnings --env-file=../apps/web/.env.local eval-compound.ts",
     "setup-checkpointer": "tsx --no-warnings --env-file=../apps/web/.env.local setup-checkpointer.ts",
     "cleanup-threads": "tsx --no-warnings --env-file=../apps/web/.env.local cleanup-threads.ts",
-    "verify-docs": "tsx verify-docs.ts"
+    "verify-docs": "tsx verify-docs.ts",
+    "eval-verify": "tsx --no-warnings --env-file=../apps/web/.env.local eval-verify.ts"
   },
   "dependencies": {
     "@langchain/textsplitters": "^1.0.2",
