@@ -39,9 +39,9 @@ const BodySchema = z
 //   {"type":"step","node":"grade","isSufficient":false,"branch":0}
 //   {"type":"step","node":"rewrite","searchQuery":"...","branch":0}
 //   {"type":"token","text":"..."}                      답변 토큰 (generate 노드 것만)
-//   {"type":"verify","ok":false,"blocks":2,"errors":[{"block","line","code","api","message","inSource"}, ...]}
-//                                                      답변에 TS 코드 블록이 있을 때만 1회. inSource는 출처 문서 코드에도 같은 에러가 있는지
 //   {"type":"sources","sources":[{"title","url"}, ...]} 답변 끝난 뒤 1회. 하위 질문별 검색 결과를 합친 것으로, 순서가 답변의 [1], [2] 번호와 같다
+//   {"type":"verify","ok":false,"blocks":2,"errors":[{"block","line","code","api","message","inSource"}, ...]}
+//                                                      sources 뒤, 답변에 TS 코드 블록이 있을 때만 1회. inSource는 출처 문서 코드에도 같은 에러가 있는지
 //   {"type":"interrupt","question":"...","options":[{"value","label"}, ...]}  되물음으로 그래프가 멈춤 (sources 없이 끝남)
 //   {"type":"error","message":"..."}                   스트리밍 도중 실패 (이미 200을 보낸 뒤라 상태 코드로 알릴 수 없음)
 export async function POST(req: Request) {
@@ -67,8 +67,6 @@ export async function POST(req: Request) {
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
           },
         );
-        let sources: Source[] = [];
-        let interrupted = false;
         // research 실행의 namespace("research:<task id>") → 분기 번호. 병렬 분기의 안쪽 이벤트가 섞여 오므로 이걸로 구분한다
         const branches = new Map<string, number>();
         for await (const [namespace, mode, chunk] of events) {
@@ -90,7 +88,6 @@ export async function POST(req: Request) {
           } else {
             // clarify 노드가 interrupt로 멈추면 updates에 __interrupt__로 그 값이 온다
             if ("__interrupt__" in chunk) {
-              interrupted = true;
               const [pending] = chunk.__interrupt__ as { value: ClarifyRequest }[];
               send({ type: "interrupt", ...pending.value });
               continue;
@@ -117,9 +114,10 @@ export async function POST(req: Request) {
               } else if (node === "rewrite") {
                 send({ type: "step", node, searchQuery: update.searchQuery, branch });
               } else if (node === "generate") {
-                // generate가 합친 답변 근거를 답변 메시지에 저장한다 (generate.ts)
+                // generate가 합친 답변 근거를 답변 메시지에 저장한다 (generate.ts).
+                // 코드 검증(verify)을 기다리지 않고 바로 보낸다
                 const [answer] = update.messages as BaseMessage[];
-                sources = (answer.additional_kwargs.sources ?? []) as Source[];
+                send({ type: "sources", sources: (answer.additional_kwargs.sources ?? []) as Source[] });
               } else if (node === "verify") {
                 // 코드 블록이 없으면 verify는 메시지를 바꾸지 않는다
                 const [answer] = (update.messages ?? []) as BaseMessage[];
@@ -128,9 +126,6 @@ export async function POST(req: Request) {
               }
             }
           }
-        }
-        if (!interrupted) {
-          send({ type: "sources", sources });
         }
       } catch (error) {
         console.error(error);

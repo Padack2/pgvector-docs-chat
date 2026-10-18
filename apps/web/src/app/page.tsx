@@ -252,17 +252,18 @@ function toGraphRun(message: Message | undefined, live: boolean): GraphRun | und
   const active = message.active ?? [];
   if (!live && steps.length === 0 && active.length === 0 && !message.clarify) return undefined;
   const path: NodeName[] = steps.filter((step) => !("branch" in step)).map((step) => step.node);
-  // generate는 끝나도 step 이벤트가 없으므로 verify가 시작되면 끝난 것으로 본다.
-  // sources는 답변과 코드 검증이 끝난 뒤에 오므로 끝까지 실행된 것이다
-  if (message.sources || message.verify || active.some((a) => a.node === "verify")) path.push("generate");
-  if (message.sources || message.verify) path.push("verify");
+  // generate는 끝나도 step 이벤트가 없으므로 sources가 오거나 verify가 시작되면 끝난 것으로 본다
+  if (message.sources || active.some((a) => a.node === "verify")) path.push("generate");
+  // verify는 코드 블록이 없으면 이벤트 없이 끝나므로, 답변 뒤 에러 없이 스트림이 끝났으면 끝까지 실행된 것이다
+  const finished = !live && !!message.sources && !message.error;
+  if (message.verify || finished) path.push("verify");
   const branches = (message.subQueries ?? []).map((_, branch) =>
     steps.filter((step) => "branch" in step && step.branch === branch).map((step) => step.node),
   );
   const current: GraphRun["current"] = message.clarify
     ? [{ node: "clarify", state: "waiting" }]
     : active.map((a) => ({ ...a, state: live ? "running" : "failed" }));
-  return { path, branches, current, done: !!message.sources };
+  return { path, branches, current, done: finished };
 }
 
 // 질문이 여러 프레임워크에 해당될 때 그래프가 멈추고 보여주는 선택지. onSelect가 없으면(진행 중 등) 고를 수 없다
@@ -526,9 +527,9 @@ export default function Home() {
           updateLast((m) => ({ ...m, active: run.active, verify: { blocks, errors } }));
         }
         else if (event.type === "sources") {
-          // 답변(generate)이 끝난 뒤에 오므로 실행이 끝까지 간 것이다
-          run.active = [];
-          updateLast((m) => ({ ...m, active: [], sources: event.sources }));
+          // 답변(generate)이 끝난 뒤, 코드 검증(verify) 전에 온다
+          run.active = run.active!.filter((a) => a.node !== "generate");
+          updateLast((m) => ({ ...m, active: run.active, sources: event.sources }));
         }
         else {
           run.error = event.message;
@@ -538,6 +539,10 @@ export default function Home() {
       if (!finished) {
         run.error = "답변을 받기 전에 연결이 끊겼습니다. 다시 시도하세요.";
         updateLast((m) => ({ ...m, error: run.error }));
+      } else if (!run.error) {
+        // 코드 블록이 없으면 verify는 끝 이벤트가 없으므로 스트림이 끝나면 실행 중인 노드를 비운다
+        run.active = [];
+        updateLast((m) => ({ ...m, active: [] }));
       }
       // 서버가 질문을 저장하기 전에 실패했으면(요청 검증 실패 등) 다시 불러오면 질문이 사라지므로 화면 상태를 유지한다
       const view = await fetchThread(request.threadId).catch(() => null);
