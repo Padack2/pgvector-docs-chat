@@ -5,6 +5,7 @@ import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
 import { GraphPanel, type GraphRun, type NodeName } from "@/components/GraphPanel";
 import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
 import type { ThreadView } from "@/lib/threads";
+import type { VerifiedError, VerifyResult } from "@/lib/verify";
 
 // 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고).
 // research 안쪽 노드는 어느 하위 질문의 분기인지(branch) 함께 온다
@@ -27,6 +28,8 @@ type Message = {
   // 시작했지만 아직 끝나지 않은 노드 (assistant만). 실패하면 실패한 노드로 남는다
   active?: ActiveNode[];
   sources?: Source[];
+  // 답변 코드 타입 검사 결과 (assistant만, 코드 블록이 있을 때)
+  verify?: VerifyResult;
   error?: string;
   // 되물음으로 그래프가 멈춰 있으면 그 질문과 선택지 (assistant만)
   clarify?: ClarifyRequest;
@@ -46,6 +49,7 @@ type ChatEvent =
   | ({ type: "step" } & Step)
   | ({ type: "interrupt" } & ClarifyRequest)
   | { type: "token"; text: string }
+  | ({ type: "verify"; ok: boolean } & VerifyResult)
   | { type: "sources"; sources: Source[] }
   | { type: "error"; message: string };
 
@@ -248,8 +252,10 @@ function toGraphRun(message: Message | undefined, live: boolean): GraphRun | und
   const active = message.active ?? [];
   if (!live && steps.length === 0 && active.length === 0 && !message.clarify) return undefined;
   const path: NodeName[] = steps.filter((step) => !("branch" in step)).map((step) => step.node);
-  // sources는 답변이 끝난 뒤에 오므로 끝까지 실행된 것이다
-  if (message.sources) path.push("generate");
+  // generate는 끝나도 step 이벤트가 없으므로 verify가 시작되면 끝난 것으로 본다.
+  // sources는 답변과 코드 검증이 끝난 뒤에 오므로 끝까지 실행된 것이다
+  if (message.sources || message.verify || active.some((a) => a.node === "verify")) path.push("generate");
+  if (message.sources || message.verify) path.push("verify");
   const branches = (message.subQueries ?? []).map((_, branch) =>
     steps.filter((step) => "branch" in step && step.branch === branch).map((step) => step.node),
   );
@@ -277,6 +283,63 @@ function ClarifyPrompt({ request, onSelect }: { request: ClarifyRequest; onSelec
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function VerifyErrorList({ errors, blocks }: { errors: VerifiedError[]; blocks: number }) {
+  return (
+    <ul className="mt-2 space-y-1.5">
+      {errors.map((e, i) => (
+        <li key={i} className="leading-relaxed">
+          <span className="font-mono text-[12px]">
+            {blocks > 1 && `코드 ${e.block + 1} · `}
+            {e.line}행 · TS{e.code}
+          </span>{" "}
+          <span className="break-words">{e.message.split("\n", 1)[0]}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// 답변 코드를 실제 패키지 타입 정의로 검사한 결과. 자동으로 고치지 않고, 에러가 출처 문서 예시에도 있는지에 따라 나눠 알린다
+function VerifyNotice({ verify }: { verify: VerifyResult }) {
+  if (verify.errors.length === 0)
+    return (
+      <p className="flex items-center gap-1.5 text-sm text-muted">
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden className="size-4 text-accent">
+          <path
+            fillRule="evenodd"
+            d="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.58l7.3-7.3a1 1 0 0 1 1.4 0Z"
+            clipRule="evenodd"
+          />
+        </svg>
+        코드 검증됨 · TypeScript 코드 {verify.blocks}개가 현재 패키지 타입 검사를 통과했어요
+      </p>
+    );
+  const invented = verify.errors.filter((e) => !e.inSource);
+  const inherited = verify.errors.filter((e) => e.inSource);
+  return (
+    <div className="space-y-2 text-sm">
+      {invented.length > 0 && (
+        <div className="rounded-lg border border-danger-line bg-danger-bg px-4 py-3 text-danger-text">
+          <p className="font-semibold">문서에 없는 API를 쓴 코드일 수 있어요</p>
+          <p className="mt-0.5 leading-relaxed">
+            현재 패키지 타입 검사에서 에러가 났고, 참고한 문서 예시에는 같은 에러가 없습니다. 답변이 잘못 만든 코드일 수 있어요.
+          </p>
+          <VerifyErrorList errors={invented} blocks={verify.blocks} />
+        </div>
+      )}
+      {inherited.length > 0 && (
+        <div className="rounded-lg border border-line bg-surface px-4 py-3">
+          <p className="font-semibold">문서 예시도 현재 패키지 타입과 맞지 않아요</p>
+          <p className="mt-0.5 leading-relaxed text-muted">
+            참고한 문서 예시에도 같은 에러가 있습니다. 문서가 옛 API를 쓰고 있을 수 있어요.
+          </p>
+          <VerifyErrorList errors={inherited} blocks={verify.blocks} />
+        </div>
+      )}
     </div>
   );
 }
@@ -437,7 +500,9 @@ export default function Home() {
       await streamChat(request, (event) => {
         if (event.type === "token" || event.type === "error" || event.type === "interrupt") finished = true;
         if (event.type === "start") {
-          run.active = [...run.active!, { node: event.node, branch: event.branch }];
+          // verify가 시작되면 generate는 끝난 것이다 (generate는 step 이벤트가 없다)
+          const running = event.node === "verify" ? run.active!.filter((a) => a.node !== "generate") : run.active!;
+          run.active = [...running, { node: event.node, branch: event.branch }];
           updateLast((m) => ({ ...m, active: run.active }));
         } else if (event.type === "branch") {
           run.subQueries = [...(run.subQueries ?? []), event.question];
@@ -455,6 +520,11 @@ export default function Home() {
             clarify: { question: event.question, options: event.options },
           }));
         } else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
+        else if (event.type === "verify") {
+          const { blocks, errors } = event;
+          run.active = run.active!.filter((a) => a.node !== "verify");
+          updateLast((m) => ({ ...m, active: run.active, verify: { blocks, errors } }));
+        }
         else if (event.type === "sources") {
           // 답변(generate)이 끝난 뒤에 오므로 실행이 끝까지 간 것이다
           run.active = [];
@@ -632,6 +702,15 @@ export default function Home() {
                   />
                 )}
                 {message.content && <AnswerMarkdown content={message.content} sources={message.sources} />}
+                {isLoading &&
+                  i === messages.length - 1 &&
+                  message.content.includes("```") &&
+                  message.active?.some((a) => a.node === "verify") && (
+                  <ul className="text-sm text-muted" aria-live="polite">
+                    <PendingLine text="답변의 코드를 타입 검사하고 있어요" />
+                  </ul>
+                )}
+                {message.verify && <VerifyNotice verify={message.verify} />}
                 {message.error && (
                   <ErrorNotice
                     message={message.error}

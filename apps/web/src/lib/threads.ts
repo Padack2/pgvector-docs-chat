@@ -2,6 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { graph } from "./graph";
 import type { ClarifyRequest } from "./graph/nodes/clarify";
+import type { VerifyResult } from "./verify";
 
 export type Source = { title: string; url: string };
 
@@ -15,7 +16,8 @@ export type ThreadMessage =
       branches: string[];
       branchIndex: number;
     }
-  | { role: "assistant"; content: string; sources: Source[] };
+  // verify: 답변 코드 타입 검사 결과 (코드 블록이 없으면 없음)
+  | { role: "assistant"; content: string; sources: Source[]; verify?: VerifyResult };
 
 export type ThreadView = {
   messages: ThreadMessage[];
@@ -76,7 +78,8 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
   const messages = messagesOf(leaf).map((message): ThreadMessage => {
     if (message.getType() !== "human") {
       const sources = (message.additional_kwargs?.sources ?? []) as Source[];
-      return { role: "assistant", content: message.text, sources };
+      const verify = message.additional_kwargs?.verify as VerifyResult | undefined;
+      return { role: "assistant", content: message.text, sources, verify };
     }
     const start = pathTurnStarts[turn++];
     const forkFrom = forkPointOf(start);

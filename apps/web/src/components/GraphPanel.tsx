@@ -1,5 +1,5 @@
 // lib/graph/index.ts의 그래프를 그대로 옮겨 그린 그림. 그래프 구조를 바꾸면 여기 좌표·엣지도 같이 고쳐야 한다
-export type NodeName = "classify" | "clarify" | "retrieve" | "grade" | "rewrite" | "generate";
+export type NodeName = "classify" | "clarify" | "retrieve" | "grade" | "rewrite" | "generate" | "verify";
 
 const NODES: Record<NodeName, { x: number; y: number; w: number; label: string }> = {
   classify: { x: 150, y: 64, w: 112, label: "질문 분석" },
@@ -8,10 +8,11 @@ const NODES: Record<NodeName, { x: number; y: number; w: number; label: string }
   grade: { x: 150, y: 280, w: 112, label: "결과 평가" },
   rewrite: { x: 254, y: 244, w: 80, label: "재작성" },
   generate: { x: 150, y: 364, w: 112, label: "답변 생성" },
+  verify: { x: 150, y: 436, w: 112, label: "코드 검증" },
 };
 const NODE_H = 40;
 const START_Y = 16;
-const END_Y = 416;
+const END_Y = 488;
 // research 서브그래프(retrieve·grade·rewrite)를 감싸는 상자. 하위 질문마다 이 상자가 병렬로 실행된다
 const RESEARCH_BOX = { x: 84, y: 174, w: 212, h: 136 };
 const RESEARCH_NODES = new Set<NodeName>(["retrieve", "grade", "rewrite"]);
@@ -27,11 +28,12 @@ const EDGES: { from: string; to: string; d: string; label?: { text: string; x: n
   { from: "grade", to: "rewrite", d: "M206 280 H254 V264", label: { text: "부족", x: 216, y: 294 } },
   { from: "rewrite", to: "retrieve", d: "M254 224 V208 H206" },
   { from: "grade", to: "generate", d: "M150 300 V344", label: { text: "충분", x: 156, y: 326 } },
-  { from: "generate", to: "end", d: `M150 384 V${END_Y - 5}` },
+  { from: "generate", to: "verify", d: "M150 384 V416" },
+  { from: "verify", to: "end", d: `M150 456 V${END_Y - 5}` },
 ];
 
 export type GraphRun = {
-  // research 밖의 노드(classify·clarify·generate) 중 지나온 노드 순서 (끝난 노드만)
+  // research 밖의 노드(classify·clarify·generate·verify) 중 지나온 노드 순서 (끝난 노드만)
   path: NodeName[];
   // 하위 질문 분기마다 research 안에서 지나온 노드 순서 (끝난 노드만)
   branches: NodeName[][];
@@ -40,14 +42,18 @@ export type GraphRun = {
   done: boolean;
 };
 
-// 지나온 경로를 분기마다 하나씩 이어 붙인다: start → (classify·clarify) → 분기의 research 노드들 → generate → end.
+// 모든 분기가 합류한 뒤에 실행되는 노드 (순서대로)
+const TAIL_NODES: NodeName[] = ["generate", "verify"];
+
+// 지나온 경로를 분기마다 하나씩 이어 붙인다: start → (classify·clarify) → 분기의 research 노드들 → generate → verify → end.
 // 분기 이벤트가 섞여 와도 분기별로 이어야 엣지가 맞게 칠해진다
 function toSequences(run: GraphRun): string[][] {
   const outside = (node: NodeName) => !RESEARCH_NODES.has(node);
-  const head = ["start", ...run.path.filter((node) => node !== "generate")];
-  head.push(...run.current.filter((c) => c.branch === undefined && c.node !== "generate").map((c) => c.node));
-  const tail: string[] = [];
-  if (run.path.includes("generate") || run.current.some((c) => c.node === "generate")) tail.push("generate");
+  const head = ["start", ...run.path.filter((node) => !TAIL_NODES.includes(node))];
+  head.push(...run.current.filter((c) => c.branch === undefined && !TAIL_NODES.includes(c.node)).map((c) => c.node));
+  const tail: string[] = TAIL_NODES.filter(
+    (node) => run.path.includes(node) || run.current.some((c) => c.node === node),
+  );
   if (run.done) tail.push("end");
   if (run.branches.length === 0) return [[...head.filter((node) => outside(node as NodeName)), ...tail]];
   return run.branches.map((branch, i) => [
@@ -67,7 +73,7 @@ export function GraphPanel({ run }: { run?: GraphRun }) {
   const parallel = run?.branches.length ?? 0;
 
   return (
-    <svg viewBox="0 0 300 432" className="w-full" role="img" aria-label="답변 처리 그래프">
+    <svg viewBox="0 0 300 504" className="w-full" role="img" aria-label="답변 처리 그래프">
       <defs>
         <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0 0 L8 4 L0 8 z" fill="var(--line)" />

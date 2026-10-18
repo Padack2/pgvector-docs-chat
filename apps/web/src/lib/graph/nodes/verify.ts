@@ -8,6 +8,8 @@ import type { GraphStateType, GraphStateUpdate } from "../state";
 export async function verify(state: GraphStateType): Promise<GraphStateUpdate> {
   const answer = state.messages[state.messages.length - 1];
   const documents = state.needsSearch ? mergeResearched(state.researched, state.subQueries) : [];
+  // 타입 검사는 동기 실행이라 이벤트 루프를 막는다. 시작 이벤트가 먼저 클라이언트로 나가도록 한 번 양보한다
+  await new Promise((resolve) => setTimeout(resolve, 50));
   try {
     const result = verifyAnswer(answer.text, documents.map((doc) => doc.content));
     if (!result.blocks) return {};
