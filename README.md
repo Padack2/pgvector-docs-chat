@@ -14,6 +14,7 @@ LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangG
 - **후속 질문 이해**: "그거 예시는?" 같은 질문을 대화 맥락을 반영한 독립 질문으로 바꿔 검색합니다.
 - **애매한 질문 되묻기**: "메모리는 어떻게 써?"처럼 LangChain·LangGraph·Deep Agents 중 어느 것인지 알 수 없으면 그래프를 멈추고 선택지를 보여준 뒤, 고른 프레임워크 문서에서만 찾습니다.
 - **대화 저장과 분기**: 대화가 서버에 저장돼 새로고침하거나 링크(`?thread=`)를 공유해도 이어집니다. 이전 질문을 고치면 그 시점부터 대화가 갈라지고, `‹ 1/2 ›`로 분기를 오갈 수 있습니다.
+- **답변 코드 검증**: 답변의 TypeScript 코드를 실제 패키지 타입 정의로 타입 검사해, 존재하지 않는 API나 잘못된 인자를 찾아 경고합니다. 같은 에러가 참고한 문서 예시에도 있으면 "문서가 옛 API일 수 있음"으로 구분해 알립니다.
 - **처리 과정 표시**: 그래프의 각 단계(검색어, 찾은 청크 수, 평가 결과)를 실시간으로 보여주고, 답변이 시작되면 접어 둡니다. 하위 질문이 여러 개면 하위 질문별로 묶어 보여주고, 우측 패널에 그래프에서 지나온 경로를 표시합니다.
 - **장애 대응**: 모델 실패 시 다른 모델로 자동 전환하고, 응답이 없으면 시간 제한 후 재시도 버튼을 보여줍니다.
 
@@ -47,10 +48,11 @@ flowchart TD
     rewrite --> retrieve
   end
   research -->|충분 또는 재검색 3회| generate["generate<br/>결과 병합(최대 8청크) + 출처 인용 답변"]
-  generate --> END([답변 스트리밍])
+  generate --> verify["verify<br/>답변 코드 타입 검사 (LLM 호출 없음)"]
+  verify --> END([답변 + 검증 결과])
 ```
 
-- `POST /api/chat`은 NDJSON 이벤트 스트림으로 응답합니다: 단계 진행(`step`), 하위 질문 분기 시작(`branch`), 답변 토큰(`token`), 출처(`sources`), 실패(`error`).
+- `POST /api/chat`은 NDJSON 이벤트 스트림으로 응답합니다: 단계 진행(`step`), 하위 질문 분기 시작(`branch`), 답변 토큰(`token`), 출처(`sources`), 코드 검증 결과(`verify`), 실패(`error`).
 - LLM 호출 횟수를 줄이려고 분류·검색어 작성·하위 질문 분해를 한 번에 처리하고, 검색 결과는 청크별이 아니라 묶어서 한 번에 평가합니다.
 
 ### 복합 질문 분해와 병렬 검색 (`Send`, 서브그래프)
@@ -60,6 +62,14 @@ flowchart TD
 - 검색 → 평가 → 재검색 반복을 `research` 서브그래프로 분리하고, 하위 질문마다 `Send`로 병렬 실행합니다. 평가와 재작성은 복합 질문 전체가 아니라 맡은 하위 질문을 기준으로 판단합니다.
 - 각 분기의 결과는 누적 reducer로 모으고, generate가 하위 질문 순서대로 1위끼리·2위끼리 번갈아 합친 뒤 같은 섹션의 청크는 하나만 남겨 최대 8청크로 답합니다.
 - 화면에는 `subgraphs: true` 스트림의 namespace로 분기를 구분해 하위 질문별 진행 단계를 보여줍니다.
+
+### 답변 코드 검증 (TypeScript 컴파일러 API)
+
+- 답변의 ` ```ts ` 코드 블록을 TypeScript 컴파일러 API로 타입 검사합니다. 빌드 전에 필요한 `.d.ts`만 한 폴더로 모아 Vercel 함수에 포함하고, 파싱한 타입 정의는 요청 간에 재사용합니다 ([`bundle-types.mjs`](apps/web/scripts/bundle-types.mjs)).
+- 답변 코드는 발췌라 선언되지 않은 변수(TS2304) 같은 에러가 흔하므로, 에러 코드 10종 중 `@langchain/*`·`langchain`·`deepagents`에 선언된 API에서 난 에러만 판정합니다.
+- 공식 문서 예시 자체도 7.3%(1,873블록 중 136블록)가 현재 타입 정의와 맞지 않습니다. 그래서 자동으로 고치지 않고, 같은 에러(에러 코드 + API 이름)가 출처 페이지의 예시에도 있는지에 따라 "답변이 잘못 만든 코드일 수 있음"과 "문서 예시도 맞지 않음"을 나눠 표시합니다 ([ADR-009](docs/adr/ADR-009-answer-code-verification.md)).
+- 출처 비교는 청크가 아니라 페이지 단위로 미리 계산한 에러 목록([`source-errors.json`](apps/web/src/lib/source-errors.json))으로 합니다. 청크 경계에서 코드 블록이 잘려 청크로 비교하면 문서 예시의 에러를 놓치기 때문입니다.
+- 출처 목록은 검사를 기다리지 않고 답변 직후 보내고, 검사 결과는 답변 메시지에 저장해 대화를 다시 불러와도 표시합니다.
 
 ### 애매한 질문 되묻기 (`interrupt`)
 
@@ -153,6 +163,20 @@ flowchart TD
 - 놓친 질문은 지금처럼 전체 문서에서 검색해 답하므로 이전보다 나빠지지는 않습니다.
 - 로컬 모델 `qwen2.5:7b`(Ollama)는 이전 23문항 평가셋에서 recall 1/10으로 거의 되묻지 않아, 이 기능은 Gemini에서만 의미가 있습니다.
 
+### 답변 코드 검증 평가
+
+구현 방법을 묻는 질문에서 답변 코드의 API 에러와 출처 비교 분류를 측정했습니다 (`pnpm --filter scripts eval-verify`, 검색 품질 평가셋 중 20문항, `gemini-3.1-flash-lite`, 2026-10-18).
+
+| 항목 | 결과 |
+|---|---:|
+| TS 코드가 있는 답변 | 20/20 |
+| 판정 에러가 있는 답변 | 2/20 |
+| 출처에도 있음 / 출처에 없음 | 2 / 0 |
+| 검사 시간 중앙값 | 66ms |
+
+- 판정된 2건(`state.authenticated`, `trimMessages`의 `tokenCounter` 누락)은 모두 실제 타입 에러였고, 출처 문서 예시를 그대로 옮긴 코드였습니다. 답변이 스스로 만든 API 에러는 이번 표본에서 나오지 않았습니다.
+- 처음에는 출처 청크의 코드와 비교해 두 건 모두 "출처에 없음"으로 잘못 분류했습니다. 코드가 든 청크의 상당수(3,049청크 중 929개)에서 코드 블록이 청크 경계에서 잘려 있었기 때문이며, 페이지 단위 비교로 바꾼 뒤 같은 답변이 바르게 분류되었습니다.
+
 ## 운영 이슈와 대응
 
 모두 무료 티어로 운영하면서 겪은 문제입니다.
@@ -163,6 +187,7 @@ flowchart TD
 | `gemini-3.8-flash` 무료 티어가 하루 20요청이라 질문 몇 개면 429 | `gemini-3.5-flash` → `gemini-3.1-flash-lite` 순으로 자동 전환 ([`llm.ts`](apps/web/src/lib/llm.ts)) |
 | 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 50초 제한 |
 | 질문을 수정해 분기하면 새 분기가 다른 분기의 메시지를 읽음 | JS `PostgresSaver`가 채널 버전을 정수로 1씩 올려 두 분기의 버전이 겹치고, `checkpoint_blobs`의 `ON CONFLICT DO NOTHING`으로 새 값이 버려지는 문제를 체크포인트 덤프로 확인. Python 구현처럼 버전에 난수 접미사를 붙이도록 `getNextVersion`을 재정의 ([`checkpointer.ts`](apps/web/src/lib/db/checkpointer.ts)) |
+| 공식 문서 예시의 7.3%가 현재 패키지 타입 정의와 맞지 않음 (옛 API, 문서·타입 불일치) | 답변 코드 검증에서 자동 수정 대신, 문서에도 있는 에러는 "문서 예시도 맞지 않음"으로 구분해 안내 ([ADR-009](docs/adr/ADR-009-answer-code-verification.md)) |
 | 스트리밍 도중 실패하면 HTTP 상태 코드로 알릴 수 없음 | `error` 이벤트로 원인별 안내(한도 초과 / 시간 초과 / 기타), 마지막 답변에 재시도 버튼 |
 
 ## 기술 스택
@@ -188,6 +213,7 @@ apps/web/src/
     ├── db/pgvector.ts        # 유사도 검색 (읽기 전용 계정)
     ├── db/checkpointer.ts    # 대화 체크포인트 저장 (PostgresSaver)
     ├── threads.ts            # 체크포인트 트리 → 화면용 대화·분기 목록
+    ├── verify.ts             # 답변 코드 타입 검사, 출처 비교 (source-errors.json: 페이지별 문서 예시 에러)
     ├── embedding.ts          # Gemini 임베딩 (저장·검색 공용)
     └── llm.ts                # LLM 호출, 모델 자동 전환
 scripts/
@@ -195,6 +221,8 @@ scripts/
 ├── eval.ts, eval/questions.json    # 검색 품질 평가
 ├── eval-clarify.ts, eval/clarify-questions.json  # 되묻기 판단 평가
 ├── eval-compound.ts, eval/compound-questions.json  # 복합 질문 평가 (--single: 단일 질문 비교)
+├── verify-docs.ts                  # 문서 예시 코드 타입 검사 (--write: source-errors.json 생성)
+├── eval-verify.ts                  # 답변 코드 검증 평가
 └── setup-checkpointer.ts / cleanup-threads.ts  # 체크포인트 테이블 생성, 오래된 대화 정리
 docs/
 ├── schema.md                 # DB 스키마
@@ -226,6 +254,12 @@ pnpm --filter scripts eval-clarify
 
 # 복합 질문 평가 (--graph: grade·rewrite 포함, --single: 단일 질문 평가셋으로 비교)
 pnpm --filter scripts eval-compound -- --graph
+
+# 문서 예시 코드 타입 검사 (--write: 출처 비교용 페이지별 에러 목록 갱신, 문서를 다시 수집한 뒤 실행)
+pnpm --filter scripts verify-docs -- --write
+
+# 답변 코드 검증 평가 (질문당 LLM 3~10회)
+pnpm --filter scripts eval-verify
 
 # 30일 넘게 활동이 없는 대화 정리 (기본은 대상만 출력)
 pnpm --filter scripts cleanup-threads -- --delete
@@ -259,4 +293,5 @@ pnpm dev
 - [ADR-006: 대상 프레임워크 확인 후 검색 범위 제한](docs/adr/ADR-006-framework-clarification.md)
 - [ADR-007: 복합 질문 분해 후 개별 검색](docs/adr/ADR-007-compound-question-retrieval.md)
 - [ADR-008: classify 검색어는 사용자 표현 유지](docs/adr/ADR-008-search-query-keeps-user-wording.md)
+- [ADR-009: 답변 코드 검증 결과는 출처 비교 경고로 표시](docs/adr/ADR-009-answer-code-verification.md)
 - [개발 계획과 진행 상황](plan.md)
