@@ -109,7 +109,10 @@ async function writePage(url: string, pageChunks: Chunk[], embeddings: number[][
 
 // 임베딩 요청 1회에 담을 만큼 페이지를 묶어서 처리한다
 // 중간에 실패해도 이미 저장된 페이지는 다음 실행 때 "unchanged"로 건너뛴다
+// 일일 한도(약 1,000건)는 챗봇 질문 임베딩과 공유하므로 1회 실행에서 상한까지만 임베딩하고 나머지는 다음 실행으로 넘긴다
+const MAX_EMBED_PER_RUN = 800;
 let done = 0;
+let embedded = 0;
 for (let i = 0; i < changed.length; ) {
   const batch: [string, Chunk[]][] = [];
   let size = 0;
@@ -117,6 +120,11 @@ for (let i = 0; i < changed.length; ) {
     size += changed[i][1].length;
     batch.push(changed[i++]);
   }
+  if (embedded + size > MAX_EMBED_PER_RUN) {
+    console.log(`  embedding limit (${MAX_EMBED_PER_RUN}/run) reached, ${changed.length - done} pages left for next run`);
+    break;
+  }
+  embedded += size;
 
   const embeddings = await embedDocuments(batch.flatMap(([, pageChunks]) => pageChunks.map((c) => c.content)));
   let offset = 0;
