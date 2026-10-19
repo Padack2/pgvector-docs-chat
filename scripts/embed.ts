@@ -2,6 +2,7 @@
 // - 청크 본문이 DB와 같은 페이지: 건너뜀 (임베딩 호출 없음)
 // - 바뀌었거나 새로운 페이지: 해당 페이지 청크만 삭제 후 재삽입 (페이지 단위 트랜잭션)
 // - DB에만 있는 페이지: 문서에서 사라진 것으로 보고 삭제
+// 추가·변경·삭제된 페이지는 바뀐 섹션의 전/후 본문과 함께 doc_changes에 기록한다 (청크 교체와 같은 트랜잭션)
 import { readFile } from "node:fs/promises";
 import pg from "pg";
 import pgvector from "pgvector/pg";
@@ -20,8 +21,8 @@ const pages = groupByUrl(chunks);
 const client = new pg.Client({ connectionString: process.env.EMBED_DATABASE_URL });
 await client.connect();
 
-const { rows } = await client.query<{ source_url: string; content: string }>(
-  "SELECT source_url, content FROM doc_chunks ORDER BY source_url, chunk_index",
+const { rows } = await client.query<{ source_url: string; title: string; content: string }>(
+  "SELECT source_url, title, content FROM doc_chunks ORDER BY source_url, chunk_index",
 );
 const stored = groupByUrl(rows);
 
@@ -35,13 +36,61 @@ console.log(
     `${pages.size - changed.length} unchanged, ${removed.length} removed`,
 );
 
+// 청크 첫 줄의 섹션 경로(chunk.ts)로 묶어 섹션별 본문을 만든다
+function toSections(rows: { content: string }[] = []): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const { content } of rows) {
+    const split = content.indexOf("\n\n");
+    const path = split < 0 ? content : content.slice(0, split);
+    const body = split < 0 ? "" : content.slice(split + 2);
+    map.set(path, map.has(path) ? `${map.get(path)}\n\n${body}` : body);
+  }
+  return map;
+}
+
+type SectionChange = { path: string; change: "added" | "changed" | "removed"; before: string | null; after: string | null };
+
+function diffSections(before?: { content: string }[], after?: { content: string }[]): SectionChange[] {
+  const old = toSections(before);
+  const now = toSections(after);
+  const changes: SectionChange[] = [];
+  for (const [path, body] of now) {
+    if (!old.has(path)) changes.push({ path, change: "added", before: null, after: body });
+    else if (old.get(path) !== body) changes.push({ path, change: "changed", before: old.get(path)!, after: body });
+  }
+  for (const [path, body] of old) {
+    if (!now.has(path)) changes.push({ path, change: "removed", before: body, after: null });
+  }
+  return changes;
+}
+
+async function recordChange(url: string, title: string, change: "added" | "changed" | "removed", pageChunks?: Chunk[]) {
+  await client.query(
+    "INSERT INTO doc_changes (source_url, title, change, sections) VALUES ($1, $2, $3, $4)",
+    [url, title, change, JSON.stringify(diffSections(stored.get(url), pageChunks))],
+  );
+}
+
+async function transaction(fn: () => Promise<void>) {
+  await client.query("BEGIN");
+  try {
+    await fn();
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  }
+}
+
 for (const url of removed) {
-  await client.query("DELETE FROM doc_chunks WHERE source_url = $1", [url]);
+  await transaction(async () => {
+    await client.query("DELETE FROM doc_chunks WHERE source_url = $1", [url]);
+    await recordChange(url, stored.get(url)![0].title, "removed");
+  });
 }
 
 async function writePage(url: string, pageChunks: Chunk[], embeddings: number[][]) {
-  await client.query("BEGIN");
-  try {
+  await transaction(async () => {
     await client.query("DELETE FROM doc_chunks WHERE source_url = $1", [url]);
     await client.query(
       `INSERT INTO doc_chunks (source_url, title, chunk_index, content, embedding)
@@ -54,11 +103,8 @@ async function writePage(url: string, pageChunks: Chunk[], embeddings: number[][
         embeddings.map((e) => pgvector.toSql(e)),
       ],
     );
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  }
+    await recordChange(url, pageChunks[0].title, stored.has(url) ? "changed" : "added", pageChunks);
+  });
 }
 
 // 임베딩 요청 1회에 담을 만큼 페이지를 묶어서 처리한다
