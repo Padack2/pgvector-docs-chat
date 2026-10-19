@@ -39,9 +39,9 @@ async function batchEmbed(texts: string[], taskType: TaskType): Promise<number[]
     if ((res.status !== 429 && res.status < 500) || attempt === MAX_RETRIES) {
       throw new Error(`embedding failed (${res.status}): ${body}`);
     }
-    // 429는 분당 한도 초과라 retryDelay가 없으면 1분 창이 지나도록 60초 대기
-    const retryDelay = body.match(/"retryDelay":\s*"(\d+)/)?.[1];
-    const delaySec = retryDelay ? Number(retryDelay) : res.status === 429 ? 60 : 2 ** attempt;
+    // 429는 분당 한도(요청 100건) 초과면 retryDelay가 "0s"로 와도 1분 창이 지나야 풀리므로 최소 60초 대기
+    const retryDelay = Number(body.match(/"retryDelay":\s*"(\d+)/)?.[1] ?? 0);
+    const delaySec = res.status === 429 ? Math.max(retryDelay, 60) : 2 ** attempt;
     // 대기 시간이 몇 시간 단위면 일일 한도 소진이므로 기다리지 않고 중단
     if (delaySec > 120) {
       throw new Error(`embedding daily quota exhausted, retry after ~${Math.ceil(delaySec / 3600)}h`);
