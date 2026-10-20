@@ -174,7 +174,10 @@ research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)�
   - 권한: `embed_user`에 `summary` 열 UPDATE만 부여 (나머지 열은 INSERT 전용 유지). Actions에서는 embed 다음 단계로 실행하며, 챗봇 기본 모델의 한도를 쓰지 않도록 `GEMINI_MODEL=gemini-3.1-flash-lite` 지정. 요약 스크립트가 `apps/web`의 `llm.ts`를 쓰므로 설치 대상에 web 추가
   - 확인 (2026-10-20, 로컬 실행·운영 DB): 기존 이력 34행 중 `removed` 3행 고정 문구, LLM 요약 30행 후 상한 도달로 `added` 1행은 다음 실행으로 이월. 표본 대조 결과 `MemoryStore`→`InMemoryStore`, `crypto.randomUUID()`→`uuid7()`(`langsmith`/`uuid` 패키지 구분 포함), `UnsupportedContentMiddleware` 추가, `interruptMode: "per_call"`·`respond` 결정 유형 추가 등 실제 변경과 일치하며, 트레이스 링크만 추가·삭제된 페이지는 "문구·서식 수정"으로 요약됨. 로컬 실행은 `.env.local`의 모델 설정을 따르므로 lite 모델 기준 결과는 Actions 실행에서 확인
   - 확인 (2026-10-20, Actions 수동 실행): web 의존성 포함 설치 성공, 문서 변경 없음(이력 추가 0행), 이월된 `added` 1행(`concepts/human-in-the-loop`)을 lite 모델 설정으로 요약해 이력 34행 모두 요약 완료. 신규 페이지 요약은 페이지 개요(Per-call/Batched 검토 방식, `Command`·`resume` 처리)를 정리한 형태로 생성됨
-- [ ] UI: "최근 문서 변경" 목록 페이지, 대화의 출처 옆 "이후 변경됨" 표시
+- [x] UI: "최근 문서 변경" 목록 페이지, 대화의 출처 옆 "이후 변경됨" 표시
+  - `/changes`: 최근 이력 100건을 동기화 날짜(KST)별로 표시 (추가·변경·삭제, 문서 링크, 요약). 요청마다 DB 조회(`force-dynamic`). 채팅 화면 헤더에 "문서 변경" 링크
+  - 출처 표시: 저장된 대화를 불러올 때(`loadThread`) 답변 턴 마지막 체크포인트의 생성 시각 이후에 기록된 출처 페이지의 최근 이력을 붙여, 출처 옆에 "이후 변경됨"/"이후 삭제됨"을 표시하고 `/changes`의 해당 이력으로 연결(요약은 툴팁). 대화 1개당 조회 1회. 판정은 페이지 단위이므로 인용한 섹션이 아닌 다른 섹션만 바뀌어도 표시됨
+  - 확인 (2026-10-20, 로컬): 10-19 동기화 이전 대화 30개 중 답변 있는 대화 대부분에서 변경된 출처(add-memory·persistence·agents·customization 등)만 표시되고 변경 없는 출처는 표시되지 않음. 배지 클릭 시 해당 이력으로 이동, 390px 폭에서 가로 스크롤 없음. 동기화 이후에 만든 대화가 없어 "변경 이후 답변은 표시 안 됨"은 실제 데이터로 확인하지 못함
 - [ ] README·schema.md·ADR 갱신
 
 ## 참고
