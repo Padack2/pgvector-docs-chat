@@ -1,5 +1,6 @@
 # 문서를 다시 크롤링해 바뀐 페이지만 재임베딩하고 변경 내역을 doc_changes에 기록한다 (ADR-002)
 # 임베딩 일일 한도로 중단돼도 반영된 페이지는 커밋되어 있으므로 다음 실행이 남은 페이지부터 이어서 처리한다
+# 이어서 요약이 없는 이력을 요약한다 (요약도 상한을 넘은 이력은 다음 실행에서 이어서 처리)
 name: Sync docs
 
 on:
@@ -24,11 +25,18 @@ jobs:
           node-version: 24
       # secret을 다루는 job이라 서드파티 action 대신 npm으로 pnpm을 설치한다
       - run: npm install -g pnpm@12.6.0
-      - run: pnpm install --frozen-lockfile --filter scripts
+      # 요약 스크립트가 apps/web의 llm.ts(LangChain)를 쓰므로 web 의존성도 설치한다
+      - run: pnpm install --frozen-lockfile --filter scripts --filter web
       - run: pnpm --filter scripts crawl
       - run: pnpm --filter scripts chunk
       # embed 스크립트의 --env-file(로컬 .env.local) 대신 secret을 환경 변수로 넘긴다
       - run: pnpm --filter scripts exec tsx embed.ts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMBED_DATABASE_URL: ${{ secrets.EMBED_DATABASE_URL }}
+      # 챗봇 기본 모델(GEMINI_MODEL)의 한도를 쓰지 않도록 lite 모델로 요약한다
+      - run: pnpm --filter scripts exec tsx summarize-changes.ts
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.1-flash-lite
           EMBED_DATABASE_URL: ${{ secrets.EMBED_DATABASE_URL }}

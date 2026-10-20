@@ -13,6 +13,7 @@
     "setup-feedback": "tsx --no-warnings --env-file=../apps/web/.env.local setup-feedback.ts",
     "feedback-export": "tsx --no-warnings --env-file=../apps/web/.env.local feedback-export.ts",
     "cleanup-threads": "tsx --no-warnings --env-file=../apps/web/.env.local cleanup-threads.ts",
+    "summarize-changes": "tsx --no-warnings --env-file=../apps/web/.env.local summarize-changes.ts",
     "verify-docs": "tsx verify-docs.ts",
     "eval-verify": "tsx --no-warnings --env-file=../apps/web/.env.local eval-verify.ts"
   },
