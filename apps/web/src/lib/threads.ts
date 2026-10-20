@@ -2,10 +2,14 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { graph } from "./graph";
 import type { ClarifyRequest } from "./graph/nodes/clarify";
+import { type DocChange, loadLatestChangesSince } from "./doc-changes";
 import { type Feedback, loadFeedback } from "./feedback";
 import type { VerifyResult } from "./verify";
 
 export type Source = { title: string; url: string };
+
+// 답변 이후 출처 문서가 바뀐 경우 그 페이지의 가장 최근 이력 (페이지 단위라 인용한 섹션이 바뀌었는지는 구분하지 않는다)
+export type SourceChange = Pick<DocChange, "id" | "change" | "summary"> & { url: string; syncedAt: string };
 
 export type ThreadMessage =
   | {
@@ -19,6 +23,7 @@ export type ThreadMessage =
     }
   // verify: 답변 코드 타입 검사 결과 (코드 블록이 없으면 없음)
   // checkpointId: 이 답변으로 끝난 턴의 마지막 체크포인트. 피드백은 이 id로 저장한다 (feedback: 저장된 피드백)
+  // sourceChanges: 답변 이후 바뀐 출처 문서
   | {
       role: "assistant";
       content: string;
@@ -26,6 +31,7 @@ export type ThreadMessage =
       verify?: VerifyResult;
       checkpointId: string;
       feedback?: Feedback;
+      sourceChanges: SourceChange[];
     };
 
 export type ThreadView = {
@@ -100,6 +106,7 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
         verify,
         checkpointId,
         feedback: feedback.get(checkpointId),
+        sourceChanges: [],
       };
     }
     const start = pathTurnStarts[turn++];
@@ -117,6 +124,30 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
     };
   });
 
+  await attachSourceChanges(messages, byId);
+
   const interrupt = (leaf.tasks.flatMap((task) => task.interrupts ?? [])[0]?.value ?? null) as ClarifyRequest | null;
   return { messages, checkpointId: idOf(leaf), interrupt };
+}
+
+// 답변 시각(턴 마지막 체크포인트의 생성 시각) 이후에 기록된 출처 문서의 변경 이력을 붙인다.
+// 페이지별 가장 최근 이력이 가장 이른 답변 이후인 것만 한 번에 조회한 뒤 답변마다 거른다
+async function attachSourceChanges(messages: ThreadMessage[], byId: Map<string, StateSnapshot>) {
+  const answers = messages.flatMap((m) => {
+    const answeredAt = m.role === "assistant" ? byId.get(m.checkpointId)?.createdAt : undefined;
+    return m.role === "assistant" && answeredAt && m.sources.length > 0 ? [{ message: m, answeredAt }] : [];
+  });
+  if (answers.length === 0) return;
+
+  const urls = Array.from(new Set(answers.flatMap(({ message }) => message.sources.map((s) => s.url))));
+  const since = answers.map((a) => a.answeredAt).sort()[0];
+  const changes = await loadLatestChangesSince(urls, since);
+  for (const { message, answeredAt } of answers) {
+    message.sourceChanges = Array.from(new Set(message.sources.map((s) => s.url))).flatMap((url) => {
+      const change = changes.get(url);
+      return change && change.syncedAt > new Date(answeredAt)
+        ? [{ id: change.id, url, change: change.change, summary: change.summary, syncedAt: change.syncedAt.toISOString() }]
+        : [];
+    });
+  }
 }

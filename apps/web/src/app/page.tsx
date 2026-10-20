@@ -1,11 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnswerMarkdown, type Source } from "@/components/AnswerMarkdown";
 import { GraphPanel, type GraphRun, type NodeName } from "@/components/GraphPanel";
 import type { Feedback, FeedbackReason } from "@/lib/feedback";
 import type { ClarifyRequest } from "@/lib/graph/nodes/clarify";
-import type { ThreadView } from "@/lib/threads";
+import type { SourceChange, ThreadView } from "@/lib/threads";
 import type { VerifiedError, VerifyResult } from "@/lib/verify";
 
 // 그래프 노드가 끝날 때마다 오는 진행 상황 (route.ts 주석 참고).
@@ -37,6 +38,8 @@ type Message = {
   // 답변(assistant)만: 이 답변으로 끝난 턴의 체크포인트와 저장된 피드백. 스트리밍 중에는 없고 다시 불러온 뒤에 생긴다
   checkpointId?: string;
   feedback?: Feedback;
+  // 답변(assistant)만: 답변 이후 바뀐 출처 문서. 다시 불러온 뒤에 생긴다
+  sourceChanges?: SourceChange[];
   // 질문(user)만: 수정·재시도 때 fork할 체크포인트와 같은 위치의 분기들 (lib/threads.ts)
   forkFrom?: string;
   branches?: string[];
@@ -158,6 +161,19 @@ function describeBranchPending(node: NodeName, branchSteps: Step[]) {
   if (node === "grade") return "검색 결과를 평가하고 있어요";
   if (node === "rewrite") return "검색어를 다시 쓰고 있어요";
   return branchSteps.some((step) => step.node === "rewrite") ? "다시 검색하고 있어요" : "문서를 찾고 있어요";
+}
+
+// 답변 이후 출처 문서가 바뀌었으면 "최근 문서 변경" 페이지의 해당 이력으로 연결한다
+function SourceChangeBadge({ change }: { change: SourceChange }) {
+  return (
+    <Link
+      href={`/changes#change-${change.id}`}
+      title={change.summary ?? undefined}
+      className="shrink-0 rounded bg-accent-soft px-1.5 py-px text-[12px] text-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      {change.change === "removed" ? "이후 삭제됨" : "이후 변경됨"}
+    </Link>
+  );
 }
 
 function PendingLine({ text }: { text: string }) {
@@ -727,6 +743,12 @@ export default function Home() {
           <h1 className="text-[17px] font-semibold tracking-tight">LangChain Docs Chat</h1>
           <div className="flex items-baseline gap-4">
             <p className="hidden text-sm text-muted sm:block">JS/TS 공식 문서 기준</p>
+            <Link
+              href="/changes"
+              className="text-sm text-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              문서 변경
+            </Link>
             {messages.length > 0 && (
               <button
                 onClick={startNewChat}
@@ -879,21 +901,25 @@ export default function Home() {
                   <div className="border-t border-line pt-3">
                     <h3 className="mb-2 text-sm text-muted">참고한 문서</h3>
                     <ul className="space-y-1.5 text-sm">
-                      {groupSources(message.sources).map((source) => (
-                        <li key={source.url} className="flex items-start gap-2">
-                          <span className="shrink-0 pt-px font-mono text-[11px] text-muted">
-                            {source.numbers.join(", ")}
-                          </span>
-                          <a
-                            href={source.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline decoration-line underline-offset-4 hover:text-accent hover:decoration-accent"
-                          >
-                            {source.title}
-                          </a>
-                        </li>
-                      ))}
+                      {groupSources(message.sources).map((source) => {
+                        const change = message.sourceChanges?.find((c) => c.url === source.url);
+                        return (
+                          <li key={source.url} className="flex items-start gap-2">
+                            <span className="shrink-0 pt-px font-mono text-[11px] text-muted">
+                              {source.numbers.join(", ")}
+                            </span>
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline decoration-line underline-offset-4 hover:text-accent hover:decoration-accent"
+                            >
+                              {source.title}
+                            </a>
+                            {change && <SourceChangeBadge change={change} />}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 )}

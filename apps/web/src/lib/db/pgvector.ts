@@ -3,7 +3,7 @@ import pgvector from "pgvector/pg";
 import { embedQuery } from "../embedding";
 
 // 챗봇은 읽기 전용 계정(DATABASE_URL)으로만 접속한다
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 export type RetrievedChunk = {
   content: string;
