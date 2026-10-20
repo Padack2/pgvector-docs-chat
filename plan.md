@@ -170,6 +170,9 @@ research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)�
   - `.github/workflows/sync-docs.yml`: 매주 월요일 03:00 KST 예약 실행 + 수동 실행, crawl → chunk → embed. 임베딩 일일 한도를 챗봇 질문 임베딩과 공유하므로 1회 실행당 임베딩 상한 800청크(`MAX_EMBED_PER_RUN`)를 두고 나머지는 다음 실행으로 넘김. 분당 한도 429는 응답의 `retryDelay`가 0초여도 최소 60초 대기 후 재시도
   - 확인 (2026-10-19~20, 운영 DB): 1차 실행은 분당 한도 429 처리 결함으로 실패(삭제 3·변경 1 기록 후 중단) → 수정 후 2차 실행은 23/29페이지에서 일일 한도로 중단 → 3차 실행에서 남은 페이지와 신규 페이지(`concepts/human-in-the-loop`, 9청크)까지 완료. 이력 합계 `changed` 30·`added` 1·`removed` 3, 중단 후 재실행으로 인한 중복 기록 없음. `deepagents/customization`의 이력 2건은 10-19와 10-20 사이 실제 문서가 다시 변경된 것으로, 두 번째 이력의 변경 전 본문이 첫 번째 이력의 변경 후 본문과 일치함을 확인. 동기화 후 `doc_chunks` 3,047청크·139페이지
 - [ ] 변경 요약 생성 (페이지당 LLM 1회, 상한 적용)
+  - `scripts/summarize-changes.ts`: `doc_changes.summary`가 NULL인 이력을 id 순으로 요약해 같은 행에 저장 (요약이 이력 행과 1:1이고, NULL이 미처리 표시를 겸해 중단 후 이어서 처리 가능). `removed`는 LLM 없이 고정 문구, `added`·`changed`는 바뀐 섹션의 전/후 본문을 `invokeChat`으로 1회 요약(기존 모델 자동 전환 재사용). 1회 실행당 LLM 요약 30페이지 상한. 섹션 하나가 3만 자를 넘는 경우가 있어 전/후 공통 앞뒤를 덜어내고 달라진 구간(앞뒤 300자 포함)만 넘기며, 3,000자를 넘으면 가운데를 생략
+  - 권한: `embed_user`에 `summary` 열 UPDATE만 부여 (나머지 열은 INSERT 전용 유지). Actions에서는 embed 다음 단계로 실행하며, 챗봇 기본 모델의 한도를 쓰지 않도록 `GEMINI_MODEL=gemini-3.1-flash-lite` 지정. 요약 스크립트가 `apps/web`의 `llm.ts`를 쓰므로 설치 대상에 web 추가
+  - 확인 (2026-10-20, 로컬 실행·운영 DB): 기존 이력 34행 중 `removed` 3행 고정 문구, LLM 요약 30행 후 상한 도달로 `added` 1행은 다음 실행으로 이월. 표본 대조 결과 `MemoryStore`→`InMemoryStore`, `crypto.randomUUID()`→`uuid7()`(`langsmith`/`uuid` 패키지 구분 포함), `UnsupportedContentMiddleware` 추가, `interruptMode: "per_call"`·`respond` 결정 유형 추가 등 실제 변경과 일치하며, 트레이스 링크만 추가·삭제된 페이지는 "문구·서식 수정"으로 요약됨. 로컬 실행은 `.env.local`의 모델 설정을 따르므로 lite 모델 기준 결과는 Actions 실행에서 확인
 - [ ] UI: "최근 문서 변경" 목록 페이지, 대화의 출처 옆 "이후 변경됨" 표시
 - [ ] README·schema.md·ADR 갱신
 
