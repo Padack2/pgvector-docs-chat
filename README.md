@@ -16,6 +16,7 @@ LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangG
 - **대화 저장과 분기**: 대화가 서버에 저장돼 새로고침하거나 링크(`?thread=`)를 공유해도 이어집니다. 이전 질문을 고치면 그 시점부터 대화가 갈라지고, `‹ 1/2 ›`로 분기를 오갈 수 있습니다.
 - **답변 코드 검증**: 답변의 TypeScript 코드를 실제 패키지 타입 정의로 타입 검사해, 존재하지 않는 API나 잘못된 인자를 찾아 경고합니다. 같은 에러가 참고한 문서 예시에도 있으면 "문서가 옛 API일 수 있음"으로 구분해 알립니다.
 - **답변 피드백**: 답변마다 👍/👎와 사유(틀린 내용 / 관련 없는 문서 / 코드 오류 / 기타)를 받아 저장합니다. 👎 받은 답변은 질문·검색어·출처와 함께 평가셋 후보로 내보낼 수 있습니다.
+- **문서 변경 추적**: 매주 공식 문서를 다시 수집해 바뀐 페이지만 반영하고, 페이지별 변경 내용을 요약해 "문서 변경" 화면에 보여줍니다. 이전 대화가 인용한 문서가 이후 바뀌었으면 출처 옆에 "이후 변경됨"으로 표시합니다.
 - **처리 과정 표시**: 그래프의 각 단계(검색어, 찾은 청크 수, 평가 결과)를 실시간으로 보여주고, 답변이 시작되면 접어 둡니다. 하위 질문이 여러 개면 하위 질문별로 묶어 보여주고, 우측 패널에 그래프에서 지나온 경로를 표시합니다.
 - **장애 대응**: 모델 실패 시 다른 모델로 자동 전환하고, 응답이 없으면 시간 제한 후 재시도 버튼을 보여줍니다.
 
@@ -28,11 +29,16 @@ flowchart LR
   A[docs.langchain.com<br/>페이지별 .md] -->|crawl.ts| B[pages.json<br/>141페이지]
   B -->|chunk.ts| C[chunks.json<br/>3,049청크]
   C -->|embed.ts<br/>바뀐 페이지만| D[(Neon Postgres<br/>pgvector HNSW)]
+  C -->|embed.ts<br/>같은 트랜잭션| E[(doc_changes<br/>섹션 전/후 본문)]
+  E -->|summarize-changes.ts<br/>페이지당 LLM 1회| E
 ```
 
 - **청킹**: MDX 태그를 정리한 뒤 헤딩 단위로 섹션을 나누고, 1500자 / 150자 overlap으로 분할합니다. 각 청크 앞에 `제목 > 섹션 > 하위 섹션` 경로를 붙여, 짧은 청크도 어느 문서의 어떤 내용인지 임베딩에 드러나게 했습니다.
 - **임베딩**: `gemini-embedding-001` 1536차원 ([ADR-001](docs/adr/ADR-001-embedding-model.md))
 - **증분 동기화**: DB에 저장된 청크 본문과 비교해 바뀐 페이지만 다시 임베딩합니다. 무료 티어 일일 한도(약 1,000건) 안에서 여러 날에 나눠 이어서 실행할 수 있습니다 ([ADR-002](docs/adr/ADR-002-incremental-sync.md)).
+- **자동 동기화**: GitHub Actions가 매주 월요일 crawl → chunk → embed → 변경 요약을 실행합니다 ([`sync-docs.yml`](.github/workflows/sync-docs.yml)). 임베딩·LLM 한도를 챗봇과 나눠 쓰므로 1회 실행당 임베딩 800청크, 요약 30페이지까지만 처리하고 나머지는 다음 실행으로 넘깁니다.
+- **변경 이력과 요약**: 청크를 교체하는 트랜잭션에서 바뀐 섹션의 전/후 본문을 `doc_changes`에 함께 기록합니다. 변경 전 본문은 교체 후 사라지므로 요약 성공 여부와 무관하게 먼저 남기고, 요약은 다음 단계에서 요약이 없는 이력부터 생성합니다 ([ADR-011](docs/adr/ADR-011-doc-change-history.md)). 3만 자가 넘는 섹션도 있어 전/후 공통 부분을 덜어내고 달라진 구간만 LLM에 넘깁니다.
+- **변경 표시**: 저장된 대화를 불러올 때 답변 시점 이후에 기록된 출처 페이지의 이력을 찾아 "이후 변경됨"/"이후 삭제됨"을 표시하고, 요약이 있는 `/changes`의 해당 이력으로 연결합니다. 판정은 페이지 단위입니다.
 
 ### 질문 처리 (LangGraph, `apps/web/src/lib/graph`)
 
@@ -186,6 +192,8 @@ flowchart TD
 | 문제 | 대응 |
 |---|---|
 | 임베딩 일일 한도(약 1,000건)로 3천 청크를 하루에 못 넣음 | 바뀐 페이지만 임베딩하는 증분 동기화로 4일에 나눠 적재 ([ADR-002](docs/adr/ADR-002-incremental-sync.md)) |
+| 자동 동기화가 분당 한도 429에서 즉시 재시도를 반복해 실패 | 응답의 `retryDelay`가 0초로 와도 최소 60초 대기 후 재시도 ([`embedding.ts`](apps/web/src/lib/embedding.ts)) |
+| 동기화가 일일 임베딩 한도를 소진하면 챗봇의 질문 임베딩도 실패 | 1회 실행당 임베딩 800청크 상한, 나머지는 다음 실행에서 이어서 처리 |
 | `gemini-3.8-flash` 무료 티어가 하루 20요청이라 질문 몇 개면 429 | `gemini-3.5-flash` → `gemini-3.1-flash-lite` 순으로 자동 전환 ([`llm.ts`](apps/web/src/lib/llm.ts)) |
 | 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 50초 제한 |
 | 질문을 수정해 분기하면 새 분기가 다른 분기의 메시지를 읽음 | JS `PostgresSaver`가 채널 버전을 정수로 1씩 올려 두 분기의 버전이 겹치고, `checkpoint_blobs`의 `ON CONFLICT DO NOTHING`으로 새 값이 버려지는 문제를 체크포인트 덤프로 확인. Python 구현처럼 버전에 난수 접미사를 붙이도록 `getNextVersion`을 재정의 ([`checkpointer.ts`](apps/web/src/lib/db/checkpointer.ts)) |
@@ -206,6 +214,7 @@ flowchart TD
 apps/web/src/
 ├── app/
 │   ├── page.tsx              # 채팅 UI (스트림 파싱, 처리 과정, 재시도, 질문 수정·분기 전환)
+│   ├── changes/page.tsx      # 최근 문서 변경 목록
 │   ├── api/chat/route.ts     # 그래프 실행 → NDJSON 이벤트 스트림
 │   ├── api/threads/[id]/route.ts  # 저장된 대화 불러오기
 │   └── api/feedback/route.ts # 답변 피드백 저장
@@ -217,11 +226,13 @@ apps/web/src/
     ├── db/checkpointer.ts    # 대화 체크포인트 저장 (PostgresSaver)
     ├── threads.ts            # 체크포인트 트리 → 화면용 대화·분기 목록
     ├── feedback.ts           # 답변 피드백 저장·조회
+    ├── doc-changes.ts        # 문서 변경 이력 조회
     ├── verify.ts             # 답변 코드 타입 검사, 출처 비교 (source-errors.json: 페이지별 문서 예시 에러)
     ├── embedding.ts          # Gemini 임베딩 (저장·검색 공용)
     └── llm.ts                # LLM 호출, 모델 자동 전환
 scripts/
-├── crawl.ts / chunk.ts / embed.ts  # 데이터 파이프라인
+├── crawl.ts / chunk.ts / embed.ts  # 데이터 파이프라인 (embed.ts: 변경 이력 기록 포함)
+├── summarize-changes.ts            # 문서 변경 이력 요약
 ├── eval.ts, eval/questions.json    # 검색 품질 평가
 ├── eval-clarify.ts, eval/clarify-questions.json  # 되묻기 판단 평가
 ├── eval-compound.ts, eval/compound-questions.json  # 복합 질문 평가 (--single: 단일 질문 비교)
@@ -229,6 +240,7 @@ scripts/
 ├── eval-verify.ts                  # 답변 코드 검증 평가
 ├── feedback-export.ts              # 👎 답변을 평가셋 후보 JSON으로 출력
 └── setup-checkpointer.ts / setup-feedback.ts / cleanup-threads.ts  # 체크포인트·피드백 테이블 생성, 오래된 대화 정리
+.github/workflows/sync-docs.yml    # 주간 문서 동기화
 docs/
 ├── schema.md                 # DB 스키마
 └── adr/                      # 설계 결정 기록
@@ -250,6 +262,7 @@ DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고,
 pnpm --filter scripts crawl
 pnpm --filter scripts chunk
 pnpm --filter scripts embed    # 무료 한도에 걸리면 멈춤. 다음 날 다시 실행하면 이어서 진행
+pnpm --filter scripts summarize-changes   # 요약이 없는 변경 이력 요약 (1회 30페이지)
 
 # 검색 품질 평가
 pnpm --filter scripts eval
@@ -286,8 +299,8 @@ pnpm dev
 | `GEMINI_API_KEY` | Gemini API 키 |
 | `GEMINI_MODEL` | 첫 번째로 시도할 LLM (기본 `gemini-3.8-flash`). 실패하면 자동 전환 |
 | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | `LLM_PROVIDER=ollama`일 때만 사용 |
-| `EMBED_DATABASE_URL` | 쓰기 계정. `scripts/embed.ts`에서만 사용 |
-| `DATABASE_URL` | 읽기 전용 계정. 챗봇 검색과 평가에서 사용 |
+| `EMBED_DATABASE_URL` | 쓰기 계정. `scripts/embed.ts`, `summarize-changes.ts`에서만 사용 |
+| `DATABASE_URL` | 읽기 전용 계정. 챗봇 검색·문서 변경 표시와 평가에서 사용 |
 | `CHECKPOINT_DATABASE_URL` | 대화 체크포인트 계정. `langgraph` 스키마만 쓰기 가능 |
 
 ## 문서
@@ -303,4 +316,5 @@ pnpm dev
 - [ADR-008: classify 검색어는 사용자 표현 유지](docs/adr/ADR-008-search-query-keeps-user-wording.md)
 - [ADR-009: 답변 코드 검증 결과는 출처 비교 경고로 표시](docs/adr/ADR-009-answer-code-verification.md)
 - [ADR-010: 답변 피드백 저장 위치](docs/adr/ADR-010-feedback-storage.md)
+- [ADR-011: 문서 변경 이력과 요약 생성 방식](docs/adr/ADR-011-doc-change-history.md)
 - [개발 계획과 진행 상황](plan.md)

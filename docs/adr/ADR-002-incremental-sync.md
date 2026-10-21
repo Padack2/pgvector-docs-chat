@@ -8,7 +8,7 @@
 - **작성자**: 김아진
 - **영향 범위**: Data
 - **태그**: 비용 / 유지보수
-- **관련 ADR**: ADR-001
+- **관련 ADR**: ADR-001, ADR-011
 - **링크**:
 
 ---
@@ -45,7 +45,7 @@
 - 부정적 영향/부채:
     - 페이지 사이에서 중단되면 일부 페이지만 신버전인 상태가 잠시 존재 (페이지 내부는 트랜잭션으로 일관)
     - 페이지 내 청크 하나만 바뀌어도 그 페이지 전체를 재임베딩
-- 추후 작업(TODO): 필요해지면 GitHub Actions cron으로 crawl → chunk → embed 자동화.
+- 추후 작업(TODO): 필요해지면 GitHub Actions cron으로 crawl → chunk → embed 자동화. 이후 변경 이력 기록과 함께 도입했다 ([ADR-011](ADR-011-doc-change-history.md)).
 
 ## 5) 검증/롤백 (Validation / Rollback)
 
