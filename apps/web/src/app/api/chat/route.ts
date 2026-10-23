@@ -28,6 +28,8 @@ const BodySchema = z
     // 이어갈 체크포인트: 화면에 보이는 분기의 끝(이어서 질문·재개) 또는 수정·재시도할 질문의 직전 상태(fork).
     // 없으면 스레드의 최신 체크포인트에서 이어간다
     checkpointId: z.string().min(1).optional(),
+    // 기억된 프레임워크를 적용하지 않고 다시 실행한다 (답변의 "기억된 선택 · 변경"). 애매한 질문이면 되묻기가 나온다
+    ignoreMemory: z.boolean().optional(),
   })
   .refine(
     (body) => (body.message === undefined) !== (body.resume === undefined),
@@ -37,7 +39,8 @@ const BodySchema = z
 // 응답은 줄 단위 JSON(NDJSON) 이벤트 스트림:
 //   {"type":"start","node":"retrieve"}                  노드가 실행을 시작할 때마다 (generate 포함)
 //   {"type":"step","node":"classify","needsSearch":true,"searchQuery":"...","needsClarify":false}  노드가 끝날 때마다 (generate 제외)
-//   {"type":"step","node":"clarify","choice":"LangGraph"}   재개 후 고른 프레임워크 (null이면 전체 문서)
+//   {"type":"step","node":"clarify","choice":"LangGraph","remembered":false}   재개 후 고른 프레임워크 (null이면 전체 문서).
+//                                                      remembered가 true면 되묻지 않고 기억된 선택을 적용한 것 (interrupt 없이 옴)
 //   {"type":"branch","branch":0,"question":"..."}      하위 질문 하나의 research가 시작될 때 (병렬 실행 순서대로 0, 1, ...)
 //   {"type":"step","node":"retrieve","count":10,"branch":0}   research 안쪽 노드(retrieve·grade·rewrite)의 start·step에는 branch가 붙는다
 //   {"type":"step","node":"grade","isSufficient":false,"branch":0}
@@ -66,11 +69,17 @@ export async function POST(req: Request) {
       try {
         // messages: LLM 토큰 단위 스트림, updates: 노드가 끝날 때마다 반환한 상태 변경분, tasks: 노드 시작·종료
         // subgraphs: research 서브그래프 안의 retrieve·grade·rewrite 이벤트도 받는다 (이벤트 앞에 namespace가 붙음)
-        const { threadId, message, resume, checkpointId } = parsed.data;
+        const { threadId, message, resume, checkpointId, ignoreMemory } = parsed.data;
         const events = await graph.stream(
           message !== undefined ? { messages: [new HumanMessage(message)] } : new Command({ resume }),
           {
-            configurable: { thread_id: threadId, checkpoint_id: checkpointId, user_id: userId },
+            configurable: {
+              thread_id: threadId,
+              checkpoint_id: checkpointId,
+              user_id: userId,
+              // 재개는 되물은 뒤이므로 기억 대신 사용자가 고른 값을 따른다 (clarify.ts)
+              ignore_memory: ignoreMemory === true || resume !== undefined,
+            },
             streamMode: ["messages", "updates", "tasks"],
             subgraphs: true,
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
@@ -115,7 +124,12 @@ export async function POST(req: Request) {
                 });
               } else if (node === "clarify") {
                 const framework = update.framework as Framework | null | undefined;
-                send({ type: "step", node, choice: framework ? FRAMEWORK_LABELS[framework] : null });
+                send({
+                  type: "step",
+                  node,
+                  choice: framework ? FRAMEWORK_LABELS[framework] : null,
+                  remembered: update.frameworkRemembered === true,
+                });
               } else if (node === "retrieve") {
                 send({ type: "step", node, count: update.documents?.length ?? 0, branch });
               } else if (node === "grade") {

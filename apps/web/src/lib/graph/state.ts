@@ -35,6 +35,8 @@ export const GraphState = Annotation.Root({
   frameworkCandidates: Annotation<Framework[]>,
   // 되물어서 사용자가 고른 프레임워크 (null이면 전체 문서)
   framework: Annotation<Framework | null>,
+  // framework를 되묻지 않고 Store에 기억된 선택으로 정했는지. 답변에 "기억된 선택"을 표시하는 데 쓴다
+  frameworkRemembered: Annotation<boolean>,
   // 후속 질문("그거 예시는?")을 대화 맥락으로 풀어 쓴 독립 질문
   searchQuery: Annotation<string>,
   // 주제별로 나눈 하위 질문 (단일 주제면 1개). 하위 질문마다 research를 병렬 실행한다 (ADR-007)
