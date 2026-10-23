@@ -200,7 +200,10 @@ research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)�
   - 2026-10-23: `setup()`이 `CREATE SCHEMA IF NOT EXISTS`를 실행하므로 스키마가 이미 있어도 DB CREATE 권한이 필요했다(42501). 체크포인트·피드백과 같이 권한을 임시 부여·회수하는 절차로 실행했다. `langgraph.store`·`store_migrations` 생성(마이그레이션 0~3), 쓰기·읽기·삭제 확인
   - `PostgresStore`는 기존 Pool을 받지 않아 체크포인트와 별도의 Pool을 만든다(`lib/db/store.ts`)
   - 쿠키 `uid`(httpOnly, SameSite=Lax, 운영에서 Secure, 1년): 로컬에서 같은 쿠키로 두 번 요청 시 첫 응답에만 Set-Cookie, 두 번째 요청은 같은 ID 사용. 형식 오류(400) 응답에는 발급하지 않는다. 노드에서 `user_id`를 읽는 것은 작업 2에서 확인
-- [ ] clarify 노드에서 Store 조회·저장·삭제, 기억 적용 여부를 상태와 route 이벤트(`clarify` step)에 추가 → 확인: 같은 쿠키는 두 번째 애매한 질문부터 되묻지 않음, 다른 쿠키는 되물음, 후보에 없는 선호는 되물음
+- [x] clarify 노드에서 Store 조회·저장·삭제, 기억 적용 여부를 상태와 route 이벤트(`clarify` step)에 추가 → 확인: 같은 쿠키는 두 번째 애매한 질문부터 되묻지 않음, 다른 쿠키는 되물음, 후보에 없는 선호는 되물음
+  - 2026-10-23: 상태 `frameworkRemembered`(classify가 질문마다 false로 초기화), `clarify` step에 `remembered`. 요청 본문 `ignoreMemory`(작업 3의 "변경"용)를 `configurable.ignore_memory`로 전달하고, 재개 요청에도 항상 넘긴다. 재개 시 clarify가 처음부터 다시 실행되는데, 그사이 기억이 생기면(다른 탭에서 선택) 사용자의 선택 대신 기억이 적용되기 때문이다
+  - 노드 단독 확인(InMemoryStore, LLM 없음): 선택 후 저장, 같은 사용자 두 번째는 되묻지 않고 적용, 다른 사용자·후보에 없는 선호·`ignore_memory`는 되물음, "구분 없이 찾기"는 삭제, `user_id`가 없으면 Store를 쓰지 않음
+  - 로컬 서버(운영 DB): 쿠키 A가 "메모리는 어떻게 써?"에서 LangGraph 선택 → 새 대화 "스트리밍은 어떻게 구현해?"는 되묻지 않고 `remembered: true`로 LangGraph 검색. 쿠키 B는 같은 질문에서 되물음. 쿠키 A + `ignoreMemory`는 되물음(기억 유지). 확인 후 테스트 대화 4개·Store 행 삭제
 - [ ] UI: 기억 적용 표시와 "변경"(기억을 무시하고 분기 재실행), 그래프 패널의 clarify 표시, 저장된 대화를 다시 불러왔을 때의 표시 → 확인: 화면 확인(라이트·다크)
 - [ ] 문서: ADR(익명 쿠키 식별, 자동 적용), schema.md(Store 테이블·`cleanup-threads`와의 관계), README
 
