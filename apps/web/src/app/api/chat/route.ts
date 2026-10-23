@@ -1,5 +1,6 @@
 import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { graph } from "@/lib/graph";
@@ -13,6 +14,9 @@ export const maxDuration = 60;
 // 모델이 응답 없이 멈추는 경우가 있어(2026-10-09 gemini-3.8-flash) 그래프 전체에 시간 제한을 둔다.
 // maxDuration보다 짧아야 제한에 걸렸을 때 에러 이벤트를 보낼 수 있다
 const GRAPH_TIMEOUT_MS = 50_000;
+// 로그인 없이 브라우저를 구분하는 익명 ID 쿠키. Store의 사용자별 기억(namespace ["users", id])에 쓴다
+const USER_COOKIE = "uid";
+const USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
 // 대화 기록은 서버의 체크포인트에 있으므로 새 질문(message) 또는 되물음에 대한 답(resume) 하나만 받는다
 const BodySchema = z
@@ -50,6 +54,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
   }
 
+  // 쿠키가 없거나 값이 UUID가 아니면 새로 발급한다
+  const cookieId = cookies().get(USER_COOKIE)?.value;
+  const isKnownUser = z.uuid().safeParse(cookieId).success;
+  const userId = isKnownUser ? cookieId! : crypto.randomUUID();
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -61,7 +70,7 @@ export async function POST(req: Request) {
         const events = await graph.stream(
           message !== undefined ? { messages: [new HumanMessage(message)] } : new Command({ resume }),
           {
-            configurable: { thread_id: threadId, checkpoint_id: checkpointId },
+            configurable: { thread_id: threadId, checkpoint_id: checkpointId, user_id: userId },
             streamMode: ["messages", "updates", "tasks"],
             subgraphs: true,
             signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
@@ -146,5 +155,15 @@ export async function POST(req: Request) {
     },
   });
 
-  return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } });
+  const response = new NextResponse(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } });
+  if (!isKnownUser) {
+    response.cookies.set(USER_COOKIE, userId, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: USER_COOKIE_MAX_AGE,
+    });
+  }
+  return response;
 }

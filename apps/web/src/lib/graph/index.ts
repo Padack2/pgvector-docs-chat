@@ -1,5 +1,6 @@
 import { END, Send, START, StateGraph } from "@langchain/langgraph";
 import { checkpointer } from "../db/checkpointer";
+import { store } from "../db/store";
 import { clarify } from "./nodes/clarify";
 import { classify } from "./nodes/classify";
 import { generate } from "./nodes/generate";
@@ -35,5 +36,6 @@ export const graph = new StateGraph(GraphState)
   .addEdge("research", "generate")
   .addEdge("generate", "verify")
   .addEdge("verify", END)
-  // 대화 기록은 thread_id별 체크포인트로 저장된다 (요청에는 새 질문만 온다)
-  .compile({ checkpointer });
+  // 대화 기록은 thread_id별 체크포인트로 저장된다 (요청에는 새 질문만 온다).
+  // store는 대화를 넘어 유지할 사용자별 기억으로, configurable.user_id로 구분한다
+  .compile({ checkpointer, store });

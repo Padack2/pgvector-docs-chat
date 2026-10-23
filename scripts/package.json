@@ -10,6 +10,7 @@
     "eval-clarify": "tsx --no-warnings --env-file=../apps/web/.env.local eval-clarify.ts",
     "eval-compound": "tsx --no-warnings --env-file=../apps/web/.env.local eval-compound.ts",
     "setup-checkpointer": "tsx --no-warnings --env-file=../apps/web/.env.local setup-checkpointer.ts",
+    "setup-store": "tsx --no-warnings --env-file=../apps/web/.env.local setup-store.ts",
     "setup-feedback": "tsx --no-warnings --env-file=../apps/web/.env.local setup-feedback.ts",
     "feedback-export": "tsx --no-warnings --env-file=../apps/web/.env.local feedback-export.ts",
     "cleanup-threads": "tsx --no-warnings --env-file=../apps/web/.env.local cleanup-threads.ts",
