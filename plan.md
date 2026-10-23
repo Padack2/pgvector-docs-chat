@@ -17,6 +17,7 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 | 8 | 답변 코드 검증 | ✅ | 코드 답변 20/20 중 판정 에러 2건, 모두 문서 예시에서 비롯됨. 운영 첫 요청 34.6초 (60초 제한 안) |
 | 9 | 사용자 피드백 수집 | 🔶 | 수집 기능 완료, 실사용 👎이 쌓이면 평가셋 보강 |
 | 10 | 문서 변경 추적 | ✅ | 주간 Actions 동기화, 변경 이력 34건(변경 30·추가 1·삭제 3) 요약, 출처 "이후 변경됨" 표시 |
+| 11 | 프레임워크 선호 기억 | ⬜ | LangGraph Store로 되묻기 선택을 대화 간에 기억 |
 
 ### 남은 작업 (Phase 7 후속)
 
@@ -182,6 +183,26 @@ research 서브그래프 (하위 질문 1개):  retrieve ▶ grade ─(부족)�
   - 확인 (2026-10-21, 운영 Vercel): `/changes` 200, 이력 34건(추가 1·변경 30·삭제 3)과 요약 표시. 10-18 대화를 `GET /api/threads/[id]`로 불러온 결과 답변 2건에서 출처 `add-memory`만 "이후 변경됨"으로 표시되고 나머지 출처는 표시되지 않음
 - [x] README·schema.md·ADR 갱신
   - ADR-011 신규(변경 이력에 섹션 전/후 본문 기록, 요약은 별도 단계). ADR-002는 비목표였던 자동 갱신을 ADR-011에서 도입했음을 연결. schema.md에 `doc_changes` 정의·권한(운영 DB의 열·제약·인덱스와 대조), README에 기능·파이프라인·운영 이슈·구조·명령 반영
+
+## Phase 11 — 프레임워크 선호 기억
+
+**목표**: 되묻기(clarify)에서 사용자가 고른 프레임워크를 LangGraph Store에 저장하고, 이후 다른 대화에서도 애매한 질문이면 되묻지 않고 기억된 프레임워크로 검색한다. 체크포인트(대화 단위 단기 기억)와 Store(사용자 단위 장기 기억)를 함께 사용한다.
+
+**설계** (2026-10-22 결정)
+- 사용자 식별: 로그인 없이 익명 ID를 사용한다. 첫 요청에서 서버가 UUID를 httpOnly 쿠키로 발급하고, route가 `configurable.user_id`로 그래프에 전달한다. Store namespace는 `["users", user_id]`, key는 `framework`. 로그인은 계속 비목표로 둔다 ([ADR-005](docs/adr/ADR-005-conversation-persistence.md))
+- 기억 범위: 프레임워크 선호만 저장한다. 추가 LLM·임베딩 호출이 없으므로 Store 벡터 인덱스는 쓰지 않는다
+- 저장소: `@langchain/langgraph-checkpoint-postgres`의 `PostgresStore`를 사용하고, `checkpoint_user`가 소유한 `langgraph` 스키마에 둔다. 테이블은 설치 스크립트로 한 번만 만들고 실행 중에는 `ensureTables: false`로 둔다
+- 적용: clarify 노드가 interrupt 전에 Store를 조회한다. 기억된 프레임워크가 후보에 있으면 되묻지 않고 그 값을 적용하고, 후보에 없으면 지금처럼 되묻는다. 되묻기에서 특정 프레임워크를 고르면 저장하고, "구분 없이 찾기"를 고르면 기억을 지운다
+- 표시: 기억을 적용한 답변에는 "기억된 선택: LangGraph · 변경"을 표시한다. "변경"을 누르면 질문 직전 체크포인트에서 분기해 기억을 적용하지 않고 다시 실행하며, 그 결과 되묻기가 나온다. 새로고침한 뒤에도 표시가 남도록 기억 적용 여부를 상태에 저장한다
+
+**작업**
+- [x] Store 테이블 생성(`scripts/setup-store.ts`), 익명 ID 쿠키 발급, route에서 `user_id` 전달, graph를 `store`와 함께 compile → 확인: 테이블 생성, 같은 브라우저에서 요청마다 같은 ID
+  - 2026-10-23: `setup()`이 `CREATE SCHEMA IF NOT EXISTS`를 실행하므로 스키마가 이미 있어도 DB CREATE 권한이 필요했다(42501). 체크포인트·피드백과 같이 권한을 임시 부여·회수하는 절차로 실행했다. `langgraph.store`·`store_migrations` 생성(마이그레이션 0~3), 쓰기·읽기·삭제 확인
+  - `PostgresStore`는 기존 Pool을 받지 않아 체크포인트와 별도의 Pool을 만든다(`lib/db/store.ts`)
+  - 쿠키 `uid`(httpOnly, SameSite=Lax, 운영에서 Secure, 1년): 로컬에서 같은 쿠키로 두 번 요청 시 첫 응답에만 Set-Cookie, 두 번째 요청은 같은 ID 사용. 형식 오류(400) 응답에는 발급하지 않는다. 노드에서 `user_id`를 읽는 것은 작업 2에서 확인
+- [ ] clarify 노드에서 Store 조회·저장·삭제, 기억 적용 여부를 상태와 route 이벤트(`clarify` step)에 추가 → 확인: 같은 쿠키는 두 번째 애매한 질문부터 되묻지 않음, 다른 쿠키는 되물음, 후보에 없는 선호는 되물음
+- [ ] UI: 기억 적용 표시와 "변경"(기억을 무시하고 분기 재실행), 그래프 패널의 clarify 표시, 저장된 대화를 다시 불러왔을 때의 표시 → 확인: 화면 확인(라이트·다크)
+- [ ] 문서: ADR(익명 쿠키 식별, 자동 적용), schema.md(Store 테이블·`cleanup-threads`와의 관계), README
 
 ## 참고
 
