@@ -12,7 +12,7 @@ LangChain 공식 문서(JS/TS)를 근거로 답하는 RAG 챗봇입니다. LangG
 - **자기 교정 검색 (Self-RAG)**: 검색 결과가 답하기에 부족하면 검색어를 문서 용어로 다시 써서 최대 3번까지 재검색합니다.
 - **복합 질문 분해**: "checkpointer와 store는 뭐가 다르고 각각 언제 써?"처럼 여러 주제를 묻는 질문을 하위 질문으로 나눠 `Send`로 동시에 검색하고, 결과를 합쳐 한 번에 답합니다.
 - **후속 질문 이해**: "그거 예시는?" 같은 질문을 대화 맥락을 반영한 독립 질문으로 바꿔 검색합니다.
-- **애매한 질문 되묻기**: "메모리는 어떻게 써?"처럼 LangChain·LangGraph·Deep Agents 중 어느 것인지 알 수 없으면 그래프를 멈추고 선택지를 보여준 뒤, 고른 프레임워크 문서에서만 찾습니다.
+- **애매한 질문 되묻기**: "메모리는 어떻게 써?"처럼 LangChain·LangGraph·Deep Agents 중 어느 것인지 알 수 없으면 그래프를 멈추고 선택지를 보여준 뒤, 고른 프레임워크 문서에서만 찾습니다. 고른 프레임워크는 브라우저별로 기억해 다음 대화부터는 되묻지 않고 적용하며, "변경"으로 다시 고를 수 있습니다.
 - **대화 저장과 분기**: 대화가 서버에 저장돼 새로고침하거나 링크(`?thread=`)를 공유해도 이어집니다. 이전 질문을 고치면 그 시점부터 대화가 갈라지고, `‹ 1/2 ›`로 분기를 오갈 수 있습니다.
 - **답변 코드 검증**: 답변의 TypeScript 코드를 실제 패키지 타입 정의로 타입 검사해, 존재하지 않는 API나 잘못된 인자를 찾아 경고합니다. 같은 에러가 참고한 문서 예시에도 있으면 "문서가 옛 API일 수 있음"으로 구분해 알립니다.
 - **답변 피드백**: 답변마다 👍/👎와 사유(틀린 내용 / 관련 없는 문서 / 코드 오류 / 기타)를 받아 저장합니다. 👎 받은 답변은 질문·검색어·출처와 함께 평가셋 후보로 내보낼 수 있습니다.
@@ -47,7 +47,7 @@ flowchart TD
   START([질문]) --> classify["classify<br/>잡담 여부 + 독립 검색어 + 하위 질문 + 프레임워크 후보"]
   classify -->|잡담| generate
   classify -->|프레임워크 애매| clarify["clarify<br/>interrupt로 되물음"]
-  clarify -->|사용자 선택으로 재개| research
+  clarify -->|사용자 선택으로 재개<br/>또는 Store에 기억된 선택| research
   classify -->|검색 필요| research
   subgraph research ["research 서브그래프 (하위 질문마다 Send로 병렬 실행)"]
     retrieve["retrieve<br/>pgvector 상위 10청크"] --> grade["grade<br/>하위 질문에 답하기에 충분한가"]
@@ -84,6 +84,13 @@ flowchart TD
 - classify가 질문과 앞선 대화에 프레임워크 단서가 없을 때만 후보를 내고, 2개 이상이면 `clarify` 노드가 `interrupt()`로 그래프를 멈춥니다. 선택지는 체크포인트에 남아 새로고침해도 다시 보이고, 고르면 `Command({ resume })`로 이어서 실행합니다.
 - 고른 프레임워크로 pgvector 검색 범위를 `source_url` 경로로 제한합니다. HNSW는 후보를 먼저 고른 뒤 거르므로 필터 검색에서만 iterative scan(pgvector 0.8)을 켜 결과가 모자라지 않게 했습니다.
 - 필터는 사용자가 직접 고른 경우에만 겁니다. classify의 추측으로 거르면 잘못 분류됐을 때 정답 문서가 빠집니다.
+
+### 프레임워크 선호 기억 (LangGraph Store)
+
+- 체크포인트는 대화 단위라 새 대화를 시작하면 같은 되묻기에 다시 답해야 합니다. 그래서 사용자 단위 장기 기억으로 `PostgresStore`를 함께 연결했습니다 (`compile({ checkpointer, store })`).
+- 로그인이 없으므로 `/api/chat`이 익명 UUID를 httpOnly 쿠키로 발급하고 `configurable.user_id`로 넘깁니다. namespace는 `["users", user_id]`입니다.
+- `clarify`가 `interrupt()` 전에 Store를 조회해, 기억된 프레임워크가 이번 후보에 있으면 되묻지 않고 적용합니다. 후보에 없으면 그 질문에 맞지 않으므로 되묻고, "구분 없이 찾기"를 고르면 기억을 지웁니다.
+- 기억을 적용한 답변에는 "기억된 선택 · 변경"을 표시합니다. "변경"은 질문 직전 체크포인트에서 기억을 무시하고 다시 실행해 되묻기를 받습니다. 재개 요청도 항상 기억을 무시합니다. 재개하면 `clarify`가 처음부터 다시 실행되므로, 그사이 다른 탭에서 생긴 기억이 사용자의 선택을 덮어쓰지 않게 하기 위해서입니다 ([ADR-012](docs/adr/ADR-012-framework-preference-memory.md)).
 
 ### 대화 저장과 분기 (`PostgresSaver`, time travel)
 
@@ -224,6 +231,7 @@ apps/web/src/
     ├── graph/                # LangGraph 상태·노드·그래프 정의 (research.ts: 검색 서브그래프와 결과 병합)
     ├── db/pgvector.ts        # 유사도 검색 (읽기 전용 계정)
     ├── db/checkpointer.ts    # 대화 체크포인트 저장 (PostgresSaver)
+    ├── db/store.ts           # 사용자별 기억 저장 (PostgresStore)
     ├── threads.ts            # 체크포인트 트리 → 화면용 대화·분기 목록
     ├── feedback.ts           # 답변 피드백 저장·조회
     ├── doc-changes.ts        # 문서 변경 이력 조회
@@ -239,7 +247,7 @@ scripts/
 ├── verify-docs.ts                  # 문서 예시 코드 타입 검사 (--write: source-errors.json 생성)
 ├── eval-verify.ts                  # 답변 코드 검증 평가
 ├── feedback-export.ts              # 👎 답변을 평가셋 후보 JSON으로 출력
-└── setup-checkpointer.ts / setup-feedback.ts / cleanup-threads.ts  # 체크포인트·피드백 테이블 생성, 오래된 대화 정리
+└── setup-checkpointer.ts / setup-store.ts / setup-feedback.ts / cleanup-threads.ts  # 체크포인트·Store·피드백 테이블 생성, 오래된 대화 정리
 .github/workflows/sync-docs.yml    # 주간 문서 동기화
 docs/
 ├── schema.md                 # DB 스키마
@@ -255,7 +263,7 @@ pnpm install
 cp apps/web/.env.example apps/web/.env.local   # 값 채우기
 ```
 
-DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 계정 3개(임베딩 저장용, 챗봇 검색용 읽기 전용, 대화 체크포인트용)를 준비합니다. 체크포인트·피드백 테이블은 schema.md의 절차대로 `pnpm --filter scripts setup-checkpointer`, `setup-feedback`으로 만듭니다.
+DB에 [`docs/schema.md`](docs/schema.md)의 테이블과 인덱스를 만들고, 계정 3개(임베딩 저장용, 챗봇 검색용 읽기 전용, 대화 체크포인트용)를 준비합니다. 체크포인트·Store·피드백 테이블은 schema.md의 절차대로 `pnpm --filter scripts setup-checkpointer`, `setup-store`, `setup-feedback`으로 만듭니다.
 
 ```bash
 # 데이터 적재 (data/ 아래에 중간 결과 저장)
@@ -317,4 +325,5 @@ pnpm dev
 - [ADR-009: 답변 코드 검증 결과는 출처 비교 경고로 표시](docs/adr/ADR-009-answer-code-verification.md)
 - [ADR-010: 답변 피드백 저장 위치](docs/adr/ADR-010-feedback-storage.md)
 - [ADR-011: 문서 변경 이력과 요약 생성 방식](docs/adr/ADR-011-doc-change-history.md)
+- [ADR-012: 프레임워크 선호 기억과 자동 적용](docs/adr/ADR-012-framework-preference-memory.md)
 - [개발 계획과 진행 상황](plan.md)

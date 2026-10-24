@@ -89,7 +89,7 @@ LangGraph `PostgresSaver`가 대화 상태를 저장하는 테이블. 테이블 
 |---|---|---|
 | embed_user | 임베딩 저장·변경 이력 기록 (`scripts/embed.ts`, `summarize-changes.ts`) | `doc_chunks` 읽기·쓰기·삭제, `doc_changes` 읽기·쓰기·`summary` 수정 |
 | readonly_user | 챗봇 검색, 문서 변경 표시 | `doc_chunks`·`doc_changes` 읽기 |
-| checkpoint_user | 대화 체크포인트, 답변 피드백 | 자기 소유인 `langgraph`·`feedback` 스키마만. `doc_chunks` 접근 불가 |
+| checkpoint_user | 대화 체크포인트, 사용자 기억(Store), 답변 피드백 | 자기 소유인 `langgraph`·`feedback` 스키마만. `doc_chunks` 접근 불가 |
 
 `PostgresSaver.setup()`은 `CREATE SCHEMA IF NOT EXISTS`를 실행하는데, PostgreSQL은 스키마가 이미 있어도 DB의 CREATE 권한을 먼저 검사한다. 그래서 테이블을 만들 때만 권한을 임시로 준다.
 
@@ -147,3 +147,37 @@ REVOKE CREATE ON DATABASE neondb FROM checkpoint_user;
 
 - `cleanup-threads -- --delete`가 대화를 지울 때 그 대화의 피드백도 함께 지운다. 체크포인트가 없으면 질문과 출처를 알 수 없기 때문이다.
 - `pnpm --filter scripts feedback-export`가 👎 피드백을 질문·검색어·출처·답변과 함께 평가셋 후보 JSON으로 출력한다.
+
+## 사용자 기억 (`langgraph` 스키마의 Store)
+
+LangGraph `PostgresStore`가 대화를 넘어 유지할 사용자별 값을 저장하는 테이블. 지금은 되묻기에서 고른 프레임워크 선호만 저장한다 ([ADR-012](adr/ADR-012-framework-preference-memory.md)). 체크포인트와 마찬가지로 테이블 정의는 패키지의 마이그레이션이 관리한다.
+
+| 테이블 | 내용 |
+|---|---|
+| store | `(namespace_path, key)`별 JSON 값 `value`와 `created_at`·`updated_at`·`expires_at` |
+| store_migrations | 적용된 마이그레이션 버전 |
+
+- 사용자는 `/api/chat`이 발급하는 익명 쿠키 `uid`(UUID, httpOnly, 1년)로 구분한다. namespace는 `["users", <uid>]`, key는 `framework`, 값은 `{ "framework": "langgraph" }` 형태
+- 되묻기에서 특정 프레임워크를 고르면 저장하고, "구분 없이 찾기"를 고르면 삭제한다. TTL은 쓰지 않으므로 `expires_at`은 비어 있다
+- 벡터 검색을 쓰지 않아 `store_vectors` 테이블은 만들지 않는다
+
+### 생성
+
+`PostgresStore.setup()`도 `CREATE SCHEMA IF NOT EXISTS`를 실행하므로 체크포인트와 같은 절차로 만든다. 요청 처리 중에는 `ensureTables: false`로 두어 마이그레이션을 실행하지 않는다.
+
+```sql
+-- 1. Neon SQL Editor (neondb_owner)
+GRANT CREATE ON DATABASE neondb TO checkpoint_user;
+
+-- 2. pnpm --filter scripts setup-store  (테이블 생성, 쓰기·읽기·삭제 확인)
+
+-- 3. Neon SQL Editor (neondb_owner)
+REVOKE CREATE ON DATABASE neondb FROM checkpoint_user;
+```
+
+패키지 업데이트로 마이그레이션이 추가되면 1 → 2 → 3을 다시 실행한다.
+
+### 보관
+
+- Store 행은 대화가 아닌 사용자 단위이므로 `cleanup-threads`가 지우지 않는다. 대화를 지워도 프레임워크 선호는 남는다.
+- 쿠키가 사라진 사용자의 행은 남는다. 사용자당 1행이라 정리하지 않는다.
