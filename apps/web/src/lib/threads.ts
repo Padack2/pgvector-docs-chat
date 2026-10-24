@@ -1,7 +1,8 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { StateSnapshot } from "@langchain/langgraph";
 import { graph } from "./graph";
-import type { ClarifyRequest } from "./graph/nodes/clarify";
+import { type ClarifyRequest, FRAMEWORK_LABELS } from "./graph/nodes/clarify";
+import type { Framework } from "./graph/state";
 import { type DocChange, loadLatestChangesSince } from "./doc-changes";
 import { type Feedback, loadFeedback } from "./feedback";
 import type { VerifyResult } from "./verify";
@@ -24,6 +25,7 @@ export type ThreadMessage =
   // verify: 답변 코드 타입 검사 결과 (코드 블록이 없으면 없음)
   // checkpointId: 이 답변으로 끝난 턴의 마지막 체크포인트. 피드백은 이 id로 저장한다 (feedback: 저장된 피드백)
   // sourceChanges: 답변 이후 바뀐 출처 문서
+  // rememberedFramework: 되묻지 않고 Store에 기억된 선택으로 검색했으면 그 프레임워크 이름
   | {
       role: "assistant";
       content: string;
@@ -32,6 +34,7 @@ export type ThreadMessage =
       checkpointId: string;
       feedback?: Feedback;
       sourceChanges: SourceChange[];
+      rememberedFramework?: string;
     };
 
 export type ThreadView = {
@@ -99,6 +102,9 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
       // 턴의 끝은 다음 턴 시작(input 체크포인트)의 부모, 마지막 턴이면 분기의 끝
       const next = pathTurnStarts[turn];
       const checkpointId = (next ? parentIdOf(next) : undefined) ?? idOf(leaf);
+      // 턴 끝 상태의 framework·frameworkRemembered는 이 턴의 것이다 (classify가 질문마다 초기화)
+      const end = byId.get(checkpointId)?.values;
+      const remembered = end?.frameworkRemembered ? (end.framework as Framework | null) : null;
       return {
         role: "assistant",
         content: message.text,
@@ -107,6 +113,7 @@ export async function loadThread(threadId: string, checkpointId?: string): Promi
         checkpointId,
         feedback: feedback.get(checkpointId),
         sourceChanges: [],
+        rememberedFramework: remembered ? FRAMEWORK_LABELS[remembered] : undefined,
       };
     }
     const start = pathTurnStarts[turn++];

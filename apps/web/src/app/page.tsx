@@ -13,7 +13,7 @@ import type { VerifiedError, VerifyResult } from "@/lib/verify";
 // research 안쪽 노드는 어느 하위 질문의 분기인지(branch) 함께 온다
 type Step =
   | { node: "classify"; needsSearch: boolean; searchQuery: string; needsClarify?: boolean }
-  | { node: "clarify"; choice: string | null }
+  | { node: "clarify"; choice: string | null; remembered?: boolean }
   | { node: "retrieve"; count: number; branch?: number }
   | { node: "grade"; isSufficient: boolean; branch?: number }
   | { node: "rewrite"; searchQuery: string; branch?: number };
@@ -40,14 +40,17 @@ type Message = {
   feedback?: Feedback;
   // 답변(assistant)만: 답변 이후 바뀐 출처 문서. 다시 불러온 뒤에 생긴다
   sourceChanges?: SourceChange[];
+  // 답변(assistant)만: 되묻지 않고 기억된 선택으로 검색했으면 그 프레임워크 이름
+  rememberedFramework?: string;
   // 질문(user)만: 수정·재시도 때 fork할 체크포인트와 같은 위치의 분기들 (lib/threads.ts)
   forkFrom?: string;
   branches?: string[];
   branchIndex?: number;
 };
 
-// /api/chat 요청: 새 질문(message) 또는 되물음에 대한 선택(resume)만 보내고, 대화 기록은 서버의 체크포인트(threadId)에 있다
-type ChatRequest = { threadId: string; message?: string; resume?: string; checkpointId?: string };
+// /api/chat 요청: 새 질문(message) 또는 되물음에 대한 선택(resume)만 보내고, 대화 기록은 서버의 체크포인트(threadId)에 있다.
+// ignoreMemory: 기억된 프레임워크를 적용하지 않고 실행한다 (애매한 질문이면 되묻는다)
+type ChatRequest = { threadId: string; message?: string; resume?: string; checkpointId?: string; ignoreMemory?: boolean };
 
 // /api/chat의 NDJSON 이벤트 (route.ts 주석 참고)
 type ChatEvent =
@@ -132,6 +135,7 @@ function describeStep(step: Step) {
       if (!step.needsSearch) return "질문 분석 · 문서 검색 없이 답변";
       return step.needsClarify ? "질문 분석 · 프레임워크 확인 필요" : `질문 분석 · 검색어 “${step.searchQuery}”`;
     case "clarify":
+      if (step.remembered) return `기억된 선택 · ${step.choice} 문서에서 검색`;
       return step.choice ? `되물음 · ${step.choice} 문서에서 검색` : "되물음 · 전체 문서에서 검색";
     case "retrieve":
       return `문서 검색 · 관련 청크 ${step.count}개`;
@@ -271,6 +275,7 @@ function toGraphRun(message: Message | undefined, live: boolean): GraphRun | und
   const steps = message.steps ?? [];
   const active = message.active ?? [];
   if (!live && steps.length === 0 && active.length === 0 && !message.clarify) return undefined;
+  const remembered = steps.some((step) => step.node === "clarify" && step.remembered);
   const path: NodeName[] = steps.filter((step) => !("branch" in step)).map((step) => step.node);
   // generate는 끝나도 step 이벤트가 없으므로 sources가 오거나 verify가 시작되면 끝난 것으로 본다
   if (message.sources || active.some((a) => a.node === "verify")) path.push("generate");
@@ -283,7 +288,27 @@ function toGraphRun(message: Message | undefined, live: boolean): GraphRun | und
   const current: GraphRun["current"] = message.clarify
     ? [{ node: "clarify", state: "waiting" }]
     : active.map((a) => ({ ...a, state: live ? "running" : "failed" }));
-  return { path, branches, current, done: finished };
+  return { path, branches, current, done: finished, remembered };
+}
+
+// 되묻지 않고 이전 대화에서 고른 프레임워크로 검색한 답변에 붙는다. "변경"은 기억 없이 다시 실행해 되묻기를 받는다
+function RememberedNotice({ framework, onChange }: { framework: string; onChange?: () => void }) {
+  return (
+    <p className="text-sm text-muted">
+      기억된 선택 · {framework} 문서에서 찾았어요
+      {onChange && (
+        <>
+          {" · "}
+          <button
+            onClick={onChange}
+            className="font-semibold text-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            변경
+          </button>
+        </>
+      )}
+    </p>
+  );
 }
 
 // 질문이 여러 프레임워크에 해당될 때 그래프가 멈추고 보여주는 선택지. onSelect가 없으면(진행 중 등) 고를 수 없다
@@ -618,9 +643,11 @@ export default function Home() {
     const question = messages.at(-2);
     if (isLoading || !threadId || !question) return;
     // forkFrom이 없으면 서버가 질문을 저장하기 전에 실패한 것이라 같은 요청을 다시 보낸다.
-    // 되물음 재개가 실패했어도 질문부터 다시 실행한다 (다시 되묻는다)
-    const checkpoint = question.forkFrom ?? lastRequest.current?.checkpointId;
-    ask({ threadId, message: question.content, checkpointId: checkpoint }, messages.slice(0, -1));
+    // 되물음 재개가 실패했어도 질문부터 다시 실행한다 (기억을 적용하지 않고 다시 되묻는다)
+    const failed = lastRequest.current;
+    const checkpoint = question.forkFrom ?? failed?.checkpointId;
+    const ignoreMemory = failed?.ignoreMemory || failed?.resume !== undefined;
+    ask({ threadId, message: question.content, checkpointId: checkpoint, ignoreMemory }, messages.slice(0, -1));
   }
 
   // 되물음에 대한 선택으로 멈춘 그래프를 재개한다. 처리 과정은 멈추기 전 단계에 이어 붙인다
@@ -640,6 +667,16 @@ export default function Home() {
     ask(
       { threadId, message: text, checkpointId: question.forkFrom },
       [...messages.slice(0, editing.index), { role: "user", content: text }],
+    );
+  }
+
+  // 기억된 선택으로 답한 질문을 그 질문 직전 체크포인트에서 기억 없이 다시 실행한다 (새 분기, 되묻기가 나온다)
+  function changeRemembered(answerIndex: number) {
+    const question = messages[answerIndex - 1];
+    if (isLoading || !threadId || !question?.forkFrom) return;
+    ask(
+      { threadId, message: question.content, checkpointId: question.forkFrom, ignoreMemory: true },
+      [...messages.slice(0, answerIndex - 1), { role: "user", content: question.content }],
     );
   }
 
@@ -680,7 +717,8 @@ export default function Home() {
           const branch = "branch" in event ? event.branch : undefined;
           run.steps = [...run.steps!, event];
           run.active = run.active!.filter((a) => a.node !== event.node || a.branch !== branch);
-          updateLast((m) => ({ ...m, steps: run.steps, active: run.active }));
+          const remembered = event.node === "clarify" && event.remembered ? event.choice ?? undefined : undefined;
+          updateLast((m) => ({ ...m, steps: run.steps, active: run.active, rememberedFramework: remembered ?? m.rememberedFramework }));
         } else if (event.type === "interrupt") {
           run.active = [];
           updateLast((m) => ({
@@ -874,6 +912,14 @@ export default function Home() {
                   active={message.active}
                   live={isLoading && i === messages.length - 1 && !message.content && !message.error && !message.clarify}
                 />
+                {/* 답변 전에는 처리 과정 목록에 같은 내용이 있으므로 답변이 나온 뒤에 표시한다 */}
+                {message.rememberedFramework && message.content && (
+                  <RememberedNotice
+                    framework={message.rememberedFramework}
+                    // 저장된 질문(forkFrom)만 그 직전에서 다시 실행할 수 있다
+                    onChange={messages[i - 1]?.forkFrom && !isLoading ? () => changeRemembered(i) : undefined}
+                  />
+                )}
                 {message.clarify && (
                   <ClarifyPrompt
                     request={message.clarify}

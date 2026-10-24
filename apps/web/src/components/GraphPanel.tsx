@@ -40,6 +40,8 @@ export type GraphRun = {
   // 실행 중이거나, 되물음으로 멈췄거나, 실패한 노드. 분기가 병렬로 돌면 여러 개다
   current: { node: NodeName; branch?: number; state: "running" | "waiting" | "failed" }[];
   done: boolean;
+  // clarify가 되묻지 않고 Store에 기억된 선택을 적용했는지
+  remembered?: boolean;
 };
 
 // 모든 분기가 합류한 뒤에 실행되는 노드 (순서대로)
@@ -180,6 +182,11 @@ export function GraphPanel({ run }: { run?: GraphRun }) {
             >
               {name}
             </text>
+            {name === "clarify" && run?.remembered && (
+              <text x={x + w / 2 + 6} y={y + 4} fontSize="10" fontWeight="600" fill="var(--accent)">
+                기억 적용
+              </text>
+            )}
             {name === "retrieve" && searches > 1 && (
               <text
                 x={x + w / 2 - 6}
