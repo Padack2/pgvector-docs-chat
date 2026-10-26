@@ -202,7 +202,7 @@ flowchart TD
 | 자동 동기화가 분당 한도 429에서 즉시 재시도를 반복해 실패 | 응답의 `retryDelay`가 0초로 와도 최소 60초 대기 후 재시도 ([`embedding.ts`](apps/web/src/lib/embedding.ts)) |
 | 동기화가 일일 임베딩 한도를 소진하면 챗봇의 질문 임베딩도 실패 | 1회 실행당 임베딩 800청크 상한, 나머지는 다음 실행에서 이어서 처리 |
 | `gemini-3.8-flash` 무료 티어가 하루 20요청이라 질문 몇 개면 429 | `gemini-3.5-flash` → `gemini-3.1-flash-lite` 순으로 자동 전환 ([`llm.ts`](apps/web/src/lib/llm.ts)) |
-| 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 50초 제한 |
+| 모델이 에러 없이 응답을 멈춰 화면이 계속 대기 | 호출마다 시간 제한(15초/30초)을 둬 다음 모델로 전환, 실패한 모델은 1분간 건너뜀. 그래프 전체도 120초 제한 |
 | 질문을 수정해 분기하면 새 분기가 다른 분기의 메시지를 읽음 | JS `PostgresSaver`가 채널 버전을 정수로 1씩 올려 두 분기의 버전이 겹치고, `checkpoint_blobs`의 `ON CONFLICT DO NOTHING`으로 새 값이 버려지는 문제를 체크포인트 덤프로 확인. Python 구현처럼 버전에 난수 접미사를 붙이도록 `getNextVersion`을 재정의 ([`checkpointer.ts`](apps/web/src/lib/db/checkpointer.ts)) |
 | 공식 문서 예시의 7.3%가 현재 패키지 타입 정의와 맞지 않음 (옛 API, 문서·타입 불일치) | 답변 코드 검증에서 자동 수정 대신, 문서에도 있는 에러는 "문서 예시도 맞지 않음"으로 구분해 안내 ([ADR-009](docs/adr/ADR-009-answer-code-verification.md)) |
 | 스트리밍 도중 실패하면 HTTP 상태 코드로 알릴 수 없음 | `error` 이벤트로 원인별 안내(한도 초과 / 시간 초과 / 기타), 마지막 답변에 재시도 버튼 |

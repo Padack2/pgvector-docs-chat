@@ -10,10 +10,10 @@ import type { Source } from "@/lib/threads";
 import type { VerifyResult } from "@/lib/verify";
 
 // Vercel 함수 최대 실행 시간(초). 이걸 넘기면 함수가 강제 종료돼 클라이언트는 에러 이벤트도 받지 못한다
-export const maxDuration = 60;
+export const maxDuration = 300;
 // 모델이 응답 없이 멈추는 경우가 있어(2026-10-09 gemini-3.8-flash) 그래프 전체에 시간 제한을 둔다.
-// maxDuration보다 짧아야 제한에 걸렸을 때 에러 이벤트를 보낼 수 있다
-const GRAPH_TIMEOUT_MS = 50_000;
+// maxDuration보다 짧아야 제한에 걸렸을 때 에러 이벤트를 보낼 수 있다 (화면에는 에러와 함께 재시도 버튼이 뜬다)
+const GRAPH_TIMEOUT_MS = 120_000;
 // 로그인 없이 브라우저를 구분하는 익명 ID 쿠키. Store의 사용자별 기억(namespace ["users", id])에 쓴다
 const USER_COOKIE = "uid";
 const USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
