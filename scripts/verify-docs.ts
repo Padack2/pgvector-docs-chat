@@ -2,7 +2,7 @@
 // 발췌 코드에서 흔한 에러(TS2304 등)가 판정에서 빠지는지, 판정된 에러가 실제 API 문제인지 사람이 확인하는 용도다.
 // 먼저 apps/web에서 scripts/bundle-types.mjs로 types-bundle/을 만들어 둬야 한다 (pnpm --filter web dev·build가 실행함)
 // --write는 페이지별 판정 에러 키를 apps/web/src/lib/source-errors.json에 저장한다. 답변 에러가 출처 문서 예시에도 있는지
-// 비교할 때 쓴다 (청크는 코드 블록이 경계에서 잘려 있어 페이지 전체로 미리 계산함). 문서를 다시 수집하면 다시 실행해야 한다
+// 비교할 때 쓴다 (청크는 코드 블록이 경계에서 잘려 있어 페이지 전체로 미리 계산함). 문서를 다시 수집하면 다시 실행해야 한다 (주간 sync-docs 워크플로가 실행함)
 //   예: pnpm --filter scripts verify-docs            (페이지별 판정 에러 목록은 --list)
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";

@@ -1,5 +1,6 @@
 # 문서를 다시 크롤링해 바뀐 페이지만 재임베딩하고 변경 내역을 doc_changes에 기록한다 (ADR-002)
 # 임베딩 일일 한도로 중단돼도 반영된 페이지는 커밋되어 있으므로 다음 실행이 남은 페이지부터 이어서 처리한다
+# 수집한 문서 예시 코드의 에러 목록(source-errors.json, ADR-009)을 다시 만들어 바뀌었으면 main에 커밋한다 (Vercel이 다시 배포)
 # 이어서 요약이 없는 이력을 요약한다 (요약도 상한을 넘은 이력은 다음 실행에서 이어서 처리)
 name: Sync docs
 
@@ -12,14 +13,17 @@ concurrency:
   group: sync-docs
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # 쓰기 토큰이 .git/config에 남아 다른 단계(문서 수집·패키지 스크립트)에서 읽히지 않도록 커밋 단계에만 넘긴다
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -34,6 +38,21 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EMBED_DATABASE_URL: ${{ secrets.EMBED_DATABASE_URL }}
+      - run: node scripts/bundle-types.mjs
+        working-directory: apps/web
+      - run: pnpm --filter scripts verify-docs --write
+      # 실행 중에 main이 앞서 나갔을 수 있으므로 rebase 후 push한다
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git add apps/web/src/lib/source-errors.json
+          git diff --cached --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: 문서 동기화로 출처 코드 에러 목록 갱신"
+          remote="https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          git pull --rebase "$remote" main
+          git push "$remote" HEAD:main
       # 챗봇 기본 모델(GEMINI_MODEL)의 한도를 쓰지 않도록 lite 모델로 요약한다
       - run: pnpm --filter scripts exec tsx summarize-changes.ts
         env:

@@ -69,7 +69,7 @@
     - 타입 검사는 동기 실행이므로 그래프 시간 제한(`AbortSignal`)으로 중단되지 않는다. 콜드 요청에서 첫 검사가 2.4초 걸렸다 (2026-10-17, Vercel 프리뷰).
 - 추후 작업(TODO)
     - 평가 문항을 늘려 "출처에 없음" 사례를 수집하고 `fix` 노드 도입 여부를 판단한다.
-    - 문서 변경 추적(plan.md Phase 10)에 `source-errors.json` 재생성을 포함한다.
+    - 문서 변경 추적(plan.md Phase 10)에 `source-errors.json` 재생성을 포함한다. → 2026-10-30 `sync-docs.yml`에 재생성 단계를 추가하고, 바뀌면 main에 커밋해 다시 배포하도록 함
 
 ## 5) 검증/롤백 (Validation / Rollback)
 
