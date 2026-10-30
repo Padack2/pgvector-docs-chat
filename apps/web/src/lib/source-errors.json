@@ -11,9 +11,7 @@
     "2353:LocalShellBackend"
   ],
   "https://docs.langchain.com/oss/javascript/deepagents/customization": [
-    "2322:createDeepAgent",
     "2339:serverInfo",
-    "2339:structuredResponse",
     "2353:LocalShellBackend",
     "2353:createDeepAgent",
     "2769:AzureChatOpenAI"
@@ -44,6 +42,9 @@
   "https://docs.langchain.com/oss/javascript/langchain/guardrails": [
     "2353:humanInTheLoopMiddleware"
   ],
+  "https://docs.langchain.com/oss/javascript/langchain/human-in-the-loop": [
+    "2305:isToolApprovalInterrupt"
+  ],
   "https://docs.langchain.com/oss/javascript/langchain/long-term-memory": [
     "2322:fromConnString",
     "2353:InMemoryStore"
@@ -68,8 +69,7 @@
     "2769:AzureChatOpenAI"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/multi-agent/subagents": [
-    "2305:AgentState",
-    "2769:createAgent"
+    "2305:AgentState"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/multi-agent/subagents-personal-assistant": [
     "2769:AzureChatOpenAI"
@@ -85,13 +85,8 @@
     "2769:providerStrategy",
     "2769:toolStrategy"
   ],
-  "https://docs.langchain.com/oss/javascript/langchain/test/unit-testing": [
-    "2345:invoke"
-  ],
   "https://docs.langchain.com/oss/javascript/langgraph/add-memory": [
-    "2322:RemoveMessage",
     "2322:search",
-    "2345:invoke",
     "2345:trimMessages"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/choosing-apis": [
@@ -103,19 +98,15 @@
   "https://docs.langchain.com/oss/javascript/langgraph/interrupts": [
     "2339:__interrupt__"
   ],
-  "https://docs.langchain.com/oss/javascript/langgraph/persistence": [
-    "2724:MemoryStore"
-  ],
   "https://docs.langchain.com/oss/javascript/langgraph/pregel": [
     "2305:ChannelWriteEntry",
     "2305:NodeBuilder",
     "2353:BinaryOperatorAggregate"
   ],
-  "https://docs.langchain.com/oss/javascript/langgraph/stores": [
-    "2724:MemoryStore"
+  "https://docs.langchain.com/oss/javascript/langgraph/sql-agent": [
+    "2769:AzureChatOpenAI"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/streaming": [
-    "2305:createAgent",
     "2339:topic",
     "2353:stream",
     "2769:useStream"
@@ -136,9 +127,7 @@
     "2769:StateGraph"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/use-subgraphs": [
-    "2339:messages",
-    "2769:createAgent",
-    "2769:streamEvents"
+    "2769:createAgent"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/workflows-agents": [
     "2345:addMessages"
