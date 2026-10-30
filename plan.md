@@ -30,7 +30,7 @@ LangChain 공식 문서(JS/TS)를 LangGraph 기반 RAG 챗봇으로 검색하는
 - [ ] 문서 동기화 때 `source-errors.json` 재생성 (ADR-009 TODO) → 확인: Actions 실행에서 바뀐 경우에만 봇 커밋이 생기고 Vercel이 다시 배포하는지
   - 10-18에 만든 목록이 10-19~20 동기화(변경 30·추가 1·삭제 3페이지) 뒤에도 그대로여서, 문서에서 고쳐진 옛 API 에러는 답변에 나와도 "출처에도 있음"으로, 새 페이지의 에러는 "출처에 없음"으로 잘못 분류될 수 있었음
   - 2026-10-30 로컬: 10-03 수집본으로 다시 만들면 기존 파일과 동일(도구 재현 확인). 10-30 수집본(142페이지, 1,784블록)으로 다시 만든 결과 판정 블록 136 → 116개(6.5%)·36 → 35페이지, 에러 키 7개 추가·18개 삭제(`persistence`·`stores`의 `MemoryStore`, `unit-testing` 등 삭제, `langchain/human-in-the-loop`·`sql-agent` 추가). 이 시점 운영 DB는 139페이지(마지막 동기화 10-26 KST)로 수집본보다 3페이지 적음
-  - `sync-docs.yml`: embed 다음에 `bundle-types.mjs` → `verify-docs --write`를 실행하고, 파일이 바뀌었을 때만 `github-actions[bot]`이 main에 커밋·push(실행 중 main이 앞서 나간 경우 rebase). 권한 `contents: write`로 변경, 쓰기 토큰은 checkout에 남기지 않고(`persist-credentials: false`) 커밋 단계에만 전달. 로컬 bare 저장소로 변경 없음·변경 있음·main 선행 3가지 경우 확인
+  - `sync-docs.yml`: embed 다음에 `bundle-types.mjs` → `verify-docs --write`를 실행하고 결과를 artifact로 넘김. 별도 job(`commit-source-errors`, 이 job만 `contents: write`)이 새로 checkout한 저장소에 artifact를 형식 검사(jq) 후 반영하고, 바뀌었을 때만 `github-actions[bot]`으로 main에 커밋·push(실행 중 main이 앞서 나간 경우 rebase). 저장소·의존성 코드를 실행하는 job과 쓰기 토큰을 분리해 git 훅·설정을 통한 토큰 탈취를 막음. 요약 단계가 실패해도 반영됨. 커밋 로직은 로컬 bare 저장소로 변경 없음·변경 있음·main 선행 3가지 경우 확인
 
 ## 기술 스택
 
