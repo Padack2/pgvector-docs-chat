@@ -19,9 +19,6 @@
     "2339:context",
     "2769:StoreBackend"
   ],
-  "https://docs.langchain.com/oss/javascript/deepagents/subagents": [
-    "2769:createAgent"
-  ],
   "https://docs.langchain.com/oss/javascript/langchain/guardrails": [
     "2353:humanInTheLoopMiddleware"
   ],
@@ -52,11 +49,11 @@
     "2322:search",
     "2345:trimMessages"
   ],
-  "https://docs.langchain.com/oss/javascript/langgraph/choosing-apis": [
-    "2345:entrypoint"
-  ],
   "https://docs.langchain.com/oss/javascript/langgraph/fault-tolerance": [
     "2769:addNode"
+  ],
+  "https://docs.langchain.com/oss/javascript/langgraph/graph-api-state": [
+    "2769:StateGraph"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/interrupts": [
     "2339:__interrupt__"
@@ -71,23 +68,5 @@
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/studio": [
     "2305:createAgent"
-  ],
-  "https://docs.langchain.com/oss/javascript/langgraph/use-functional-api": [
-    "2305:InMemoryCache",
-    "2322:ToolMessage",
-    "2353:task",
-    "2554:StateGraph",
-    "2554:invoke",
-    "2769:streamEvents"
-  ],
-  "https://docs.langchain.com/oss/javascript/langgraph/use-graph-api": [
-    "2551:subject",
-    "2769:StateGraph"
-  ],
-  "https://docs.langchain.com/oss/javascript/langgraph/use-subgraphs": [
-    "2769:createAgent"
-  ],
-  "https://docs.langchain.com/oss/javascript/langgraph/workflows-agents": [
-    "2345:addMessages"
   ]
 }
