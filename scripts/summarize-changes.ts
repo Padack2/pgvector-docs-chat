@@ -68,29 +68,41 @@ const { rows } = await client.query<{ id: string; title: string; change: string;
 );
 console.log(`changes without summary: ${rows.length}`);
 
+let attempted = 0;
 let summarized = 0;
+const failed: string[] = [];
 for (const row of rows) {
   let summary: string;
   if (row.change === "removed") {
     summary = "페이지가 문서에서 삭제되었습니다.";
   } else {
-    if (summarized >= MAX_SUMMARIES_PER_RUN) {
+    if (attempted >= MAX_SUMMARIES_PER_RUN) {
       console.log(`  summary limit (${MAX_SUMMARIES_PER_RUN}/run) reached, rest left for next run`);
       break;
     }
+    attempted++;
     const kind = row.change === "added" ? "새로 추가된 페이지" : "변경된 페이지";
     // scripts 패키지는 @langchain/core에 의존하지 않으므로 메시지를 {role, content}로 넘긴다 (LangChain이 변환)
     const messages = [
       { role: "system", content: PROMPT },
       { role: "user", content: `페이지: ${row.title} (${kind})\n\n${formatSections(row.sections)}` },
     ];
-    const response = await invokeChat(messages as unknown as Parameters<typeof invokeChat>[0]);
-    summary = response.text.trim();
+    // 모든 모델이 실패해도(503 과부하 등) 실행을 멈추지 않고 이 행은 NULL로 남겨 다음 실행에서 다시 시도한다
+    try {
+      const response = await invokeChat(messages as unknown as Parameters<typeof invokeChat>[0]);
+      summary = response.text.trim();
+    } catch (error) {
+      console.warn(`  #${row.id} ${row.title}: failed, left for next run:`, String(error).slice(0, 200));
+      failed.push(row.id);
+      continue;
+    }
     summarized++;
   }
   await client.query("UPDATE doc_changes SET summary = $1 WHERE id = $2", [summary, row.id]);
   console.log(`  #${row.id} ${row.title}: ${summary}`);
 }
 
-console.log(`done. LLM summaries: ${summarized}`);
+console.log(`done. LLM summaries: ${summarized}, failed: ${failed.length}${failed.length ? ` (#${failed.join(", #")})` : ""}`);
 await client.end();
+// 실패가 남으면 Actions 실행을 실패로 표시해 알 수 있게 한다
+if (failed.length > 0) process.exitCode = 1;
