@@ -2,6 +2,9 @@
   "https://docs.langchain.com/oss/javascript/concepts/memory": [
     "2353:InMemoryStore"
   ],
+  "https://docs.langchain.com/oss/javascript/deepagents/async-subagents": [
+    "2305:getNotificationMetadata"
+  ],
   "https://docs.langchain.com/oss/javascript/deepagents/backends": [
     "2339:executionInfo",
     "2339:serverInfo",
@@ -26,10 +29,14 @@
     "2305:isToolApprovalInterrupt"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/middleware/built-in": [
+    "2724:modelRefusalMiddleware",
     "2769:createAgent"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/middleware/overview": [
     "2305:AgentState"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/models": [
+    "2305:ModelRefusalError"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/multi-agent/handoffs-customer-support": [
     "2724:SummarizationMiddleware"
@@ -37,13 +44,20 @@
   "https://docs.langchain.com/oss/javascript/langchain/multi-agent/subagents": [
     "2305:AgentState"
   ],
+  "https://docs.langchain.com/oss/javascript/langchain/observability": [
+    "2769:createAgent"
+  ],
   "https://docs.langchain.com/oss/javascript/langchain/runtime": [
     "2551:get"
   ],
   "https://docs.langchain.com/oss/javascript/langchain/structured-output": [
     "2339:structuredResponse",
+    "2724:modelRefusalMiddleware",
     "2769:providerStrategy",
     "2769:toolStrategy"
+  ],
+  "https://docs.langchain.com/oss/javascript/langchain/studio": [
+    "2769:createAgent"
   ],
   "https://docs.langchain.com/oss/javascript/langgraph/add-memory": [
     "2322:search",
