@@ -6,6 +6,8 @@ import pg from "pg";
 import { invokeChat } from "../apps/web/src/lib/llm";
 
 const MAX_SUMMARIES_PER_RUN = 30;
+// 모델별 분당 5회 한도에 걸리지 않도록 LLM 호출 사이에 간격을 둔다
+const CALL_INTERVAL_MS = 12_000;
 // 섹션이 많거나 긴 페이지(신규 페이지 등)도 요청 1회에 담기도록 본문을 자른다
 const MAX_SECTION_CHARS = 3_000;
 const MAX_INPUT_CHARS = 30_000;
@@ -80,6 +82,7 @@ for (const row of rows) {
       console.log(`  summary limit (${MAX_SUMMARIES_PER_RUN}/run) reached, rest left for next run`);
       break;
     }
+    if (attempted > 0) await new Promise((resolve) => setTimeout(resolve, CALL_INTERVAL_MS));
     attempted++;
     const kind = row.change === "added" ? "새로 추가된 페이지" : "변경된 페이지";
     // scripts 패키지는 @langchain/core에 의존하지 않으므로 메시지를 {role, content}로 넘긴다 (LangChain이 변환)
@@ -104,5 +107,5 @@ for (const row of rows) {
 
 console.log(`done. LLM summaries: ${summarized}, failed: ${failed.length}${failed.length ? ` (#${failed.join(", #")})` : ""}`);
 await client.end();
-// 실패가 남으면 Actions 실행을 실패로 표시해 알 수 있게 한다
-if (failed.length > 0) process.exitCode = 1;
+// 실패한 행은 다음 실행에서 다시 시도되므로 실행을 실패로 만들지 않고 Actions 경고로만 남긴다
+if (failed.length > 0) console.log(`::warning::summary failed for ${failed.length} change(s), left for next run: #${failed.join(", #")}`);
